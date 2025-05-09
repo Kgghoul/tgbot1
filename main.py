@@ -82,10 +82,12 @@ async def schedule_inactive_reminders():
         try:
             # Получаем текущее время
             now = datetime.datetime.now()
+            # Добавляем смещение для перевода в астанинское время (UTC+6)
+            astana_time = now + datetime.timedelta(hours=6)
             
-            # Запускаем проверку неактивных пользователей каждый день в 10:00
-            if now.hour == 10 and now.minute == 0:
-                logger.info("Запуск проверки неактивных пользователей по расписанию")
+            # Запускаем проверку неактивных пользователей каждый день в 10:00 по Астане
+            if astana_time.hour == 10 and astana_time.minute == 0:
+                logger.info("Запуск проверки неактивных пользователей по расписанию (10:00 по Астане)")
                 await handlers.check_inactive_users(bot)
             
             # Ждем 60 секунд до следующей проверки
@@ -101,10 +103,12 @@ async def schedule_weekly_reports():
         try:
             # Получаем текущее время и день недели
             now = datetime.datetime.now()
+            # Добавляем смещение для перевода в астанинское время (UTC+6)
+            astana_time = now + datetime.timedelta(hours=6)
             
-            # Отправляем отчет каждый понедельник в 9:00
-            if now.weekday() == 0 and now.hour == 9 and now.minute == 0:
-                logger.info("Запуск отправки еженедельного отчета по расписанию")
+            # Отправляем отчет каждый понедельник в 9:00 по Астане
+            if astana_time.weekday() == 0 and astana_time.hour == 9 and astana_time.minute == 0:
+                logger.info("Запуск отправки еженедельного отчета по расписанию (9:00 понедельник по Астане)")
                 await handlers.send_weekly_report(bot)
             
             # Ждем 60 секунд до следующей проверки
@@ -120,10 +124,12 @@ async def schedule_daily_topics():
         try:
             # Получаем текущее время
             now = datetime.datetime.now()
+            # Добавляем смещение для перевода в астанинское время (UTC+6)
+            astana_time = now + datetime.timedelta(hours=6)
             
-            # Отправляем тему для обсуждения каждый день в 12:00
-            if now.hour == 12 and now.minute == 0:
-                logger.info("Запуск отправки ежедневной темы для обсуждения по расписанию")
+            # Отправляем тему для обсуждения каждый день в 12:00 по Астане
+            if astana_time.hour == 12 and astana_time.minute == 0:
+                logger.info("Запуск отправки ежедневной темы для обсуждения по расписанию (12:00 по Астане)")
                 await handlers.send_daily_topic(bot)
             
             # Ждем 60 секунд до следующей проверки
@@ -139,10 +145,12 @@ async def schedule_active_user_of_day():
         try:
             # Получаем текущее время
             now = datetime.datetime.now()
+            # Добавляем смещение для перевода в астанинское время (UTC+6)
+            astana_time = now + datetime.timedelta(hours=6)
             
-            # Определяем активного пользователя каждый день в 20:00
-            if now.hour == 20 and now.minute == 0:
-                logger.info("Запуск определения активного пользователя дня по расписанию")
+            # Определяем активного пользователя каждый день в 20:00 по Астане
+            if astana_time.hour == 20 and astana_time.minute == 0:
+                logger.info("Запуск определения активного пользователя дня по расписанию (20:00 по Астане)")
                 await handlers.send_active_user_of_the_day(bot)
             
             # Ждем 60 секунд до следующей проверки
@@ -158,11 +166,13 @@ async def schedule_random_questions():
         try:
             # Получаем текущее время
             now = datetime.datetime.now()
+            # Добавляем смещение для перевода в астанинское время (UTC+6)
+            astana_time = now + datetime.timedelta(hours=6)
             
-            # Определяем случайные часы для отправки (с 10:00 до 19:00)
+            # Определяем случайные часы для отправки (с 10:00 до 19:00 по Астане)
             # Это генерируется один раз в день и затем используется весь день
             # Используем день года как seed для воспроизводимости
-            day_of_year = now.timetuple().tm_yday
+            day_of_year = astana_time.timetuple().tm_yday
             random.seed(day_of_year)
             random_hour = random.randint(10, 19)
             random_minute = random.randint(0, 59)
@@ -170,11 +180,11 @@ async def schedule_random_questions():
             # Сбрасываем seed для других случайных операций
             random.seed()
             
-            logger.debug(f"Сегодня случайный вопрос будет отправлен в {random_hour}:{random_minute:02d}")
+            logger.debug(f"Сегодня случайный вопрос будет отправлен в {random_hour}:{random_minute:02d} по Астане")
             
-            # Отправляем вопрос в определенное случайное время
-            if now.hour == random_hour and now.minute == random_minute:
-                logger.info(f"Запуск отправки случайного вопроса дня по расписанию в {now.hour}:{now.minute:02d}")
+            # Отправляем вопрос в определенное случайное время по Астане
+            if astana_time.hour == random_hour and astana_time.minute == random_minute:
+                logger.info(f"Запуск отправки случайного вопроса дня по расписанию в {astana_time.hour}:{astana_time.minute:02d} по Астане")
                 await handlers.send_random_question(bot)
             
             # Ждем 60 секунд до следующей проверки
@@ -182,6 +192,22 @@ async def schedule_random_questions():
         except Exception as e:
             logger.error(f"Ошибка в планировщике случайных вопросов дня: {e}")
             await asyncio.sleep(60)  # В случае ошибки также ждем 60 секунд
+
+# Планировщик проверки активности чатов
+async def schedule_chat_activity_check():
+    """Планировщик для проверки активности в чатах и вызова случайных пользователей"""
+    while True:
+        try:
+            logger.debug("Проверка активности в чатах")
+            
+            # Запускаем проверку каждые 15 минут
+            await handlers.invite_random_users_to_chat(bot)
+            
+            # Ждем 15 минут до следующей проверки
+            await asyncio.sleep(15 * 60)  # 15 минут
+        except Exception as e:
+            logger.error(f"Ошибка в планировщике проверки активности чатов: {e}")
+            await asyncio.sleep(60)  # В случае ошибки ждем 1 минуту
 
 # Прямая регистрация игровых обработчиков
 logger.info("Регистрация игровых обработчиков...")
@@ -283,6 +309,7 @@ async def on_startup(dispatcher):
     await scheduler.spawn(schedule_active_user_of_day())
     await scheduler.spawn(schedule_random_questions())
     await scheduler.spawn(schedule_event_notifications())
+    await scheduler.spawn(schedule_chat_activity_check())
     
     logger.info("Планировщик регулярных задач успешно запущен")
 

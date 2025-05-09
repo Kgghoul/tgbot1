@@ -10,16 +10,28 @@ import aiosqlite
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.dispatcher.filters import Text
-
-from config import POINTS_PER_MESSAGE, POINTS_PER_REPLY, ADMIN_ID, INACTIVITY_THRESHOLD_DAYS, BOT_USERNAME, DB_PATH
-from database import db
+import os
+import json
+from typing import Dict, List, Optional, Union, Tuple
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils.emoji import emojize
+from aiogram.types import ParseMode, BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+import config
+from config import ADMIN_ID, DB_PATH, INACTIVITY_THRESHOLD_DAYS, POINTS_PER_MESSAGE, POINTS_PER_REPLY
+from database import Database, init_db, db
+from games import EmojiGame, QuizGame
 from jokes_facts import get_random_content
-from schedule import ScheduleManager
+
+# Проверка импорта модуля schedule
+try:
+    from schedule import ScheduleManager
+    # Создаем экземпляр менеджера расписания
+    schedule_manager = ScheduleManager(DB_PATH)
+except ImportError as e:
+    logging.error(f"Ошибка импорта модуля schedule: {e}")
+    schedule_manager = None
 
 logger = logging.getLogger(__name__)
-
-# Создаем экземпляр менеджера расписания
-schedule_manager = ScheduleManager(DB_PATH)
 
 # Объявляем переменную bot, которая будет установлена из main.py
 bot = None
@@ -963,13 +975,17 @@ async def cmd_send_to_all(message: types.Message):
 # Добавим метод в класс Database для получения количества определенных типов активности
 async def get_activity_count(self, chat_id, user_id, activity_type):
     """Получает количество активностей определенного типа для пользователя"""
-    async with aiosqlite.connect(self.db_path) as db:
-        cursor = await db.execute(
-            'SELECT COUNT(*) FROM activity WHERE chat_id = ? AND user_id = ? AND message_type = ?',
-            (chat_id, user_id, activity_type)
-        )
-        result = await cursor.fetchone()
-        return result[0] if result else 0
+    try:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'SELECT COUNT(*) FROM activity WHERE chat_id = ? AND user_id = ? AND message_type = ?',
+                (chat_id, user_id, activity_type)
+            )
+            result = await cursor.fetchone()
+            return result[0] if result else 0
+    except Exception as e:
+        logging.error(f"Ошибка при получении количества активностей: {e}")
+        return 0
 
 # Добавляем метод класса Database в объект db
 setattr(db.__class__, 'get_activity_count', get_activity_count)
@@ -978,13 +994,17 @@ setattr(db.__class__, 'get_activity_count', get_activity_count)
 # Добавим метод в класс Database для получения количества пользователей в чате
 async def get_chat_user_count(self, chat_id):
     """Получает общее количество уникальных пользователей в чате"""
-    async with aiosqlite.connect(self.db_path) as db:
-        cursor = await db.execute(
-            'SELECT COUNT(DISTINCT user_id) FROM activity WHERE chat_id = ?',
-            (chat_id,)
-        )
-        result = await cursor.fetchone()
-        return result[0] if result else 0
+    try:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'SELECT COUNT(DISTINCT user_id) FROM activity WHERE chat_id = ?',
+                (chat_id,)
+            )
+            result = await cursor.fetchone()
+            return result[0] if result else 0
+    except Exception as e:
+        logging.error(f"Ошибка при получении количества пользователей: {e}")
+        return 0
 
 # Добавляем метод класса Database в объект db
 setattr(db.__class__, 'get_chat_user_count', get_chat_user_count)
@@ -1194,7 +1214,7 @@ async def cmd_schedule(message: types.Message):
         await message.answer(
             "📅 *Расписание событий*\n\n"
             "В этом чате пока нет запланированных событий.\n\n"
-            "Чтобы создать новое событие, используйте команду /create_event",
+            "Чтобы создать новое событие, используйте команду /create\\_event",
             parse_mode="Markdown"
         )
         return
@@ -1217,10 +1237,10 @@ async def cmd_schedule(message: types.Message):
             response += f"📝 Описание: {event['description']}\n"
         
         response += f"👥 Участников: {event['participant_count']}\n"
-        response += f"/join_{event['id']} - присоединиться\n"
-        response += f"/event_{event['id']} - подробнее\n\n"
+        response += f"/join\\_{event['id']} - присоединиться\n"
+        response += f"/event\\_{event['id']} - подробнее\n\n"
     
-    response += "Чтобы создать новое событие, используйте команду /create_event"
+    response += "Чтобы создать новое событие, используйте команду /create\\_event"
     
     await message.answer(response, parse_mode="Markdown")
 
@@ -1231,7 +1251,7 @@ async def cmd_create_event(message: types.Message, state: FSMContext):
     if message.chat.type == "private":
         await message.answer(
             "ℹ️ Создавать события можно только в групповых чатах.\n"
-            "Перейдите в чат группы и используйте там команду /create_event"
+            "Перейдите в чат группы и используйте там команду /create\\_event"
         )
         return
     
@@ -1248,14 +1268,23 @@ async def cmd_create_event(message: types.Message, state: FSMContext):
 # Обработчик отмены создания события
 async def cmd_cancel_event_creation(message: types.Message, state: FSMContext):
     """Отменяет процесс создания нового события"""
-    current_state = await state.get_state()
-    
-    if current_state is None:
-        return
-    
-    # Если пользователь находится в одном из состояний создания события
-    if current_state.startswith('ScheduleStates'):
-        await state.finish()
+    try:
+        current_state = await state.get_state()
+        
+        if current_state is None:
+            return
+        
+        # Если пользователь находится в одном из состояний создания события
+        if current_state.startswith('ScheduleStates'):
+            # Попробуем сбросить состояние безопасно
+            try:
+                await state.reset_state(with_data=True)
+            except Exception as e:
+                logger.error(f"Ошибка при сбросе состояния: {e}")
+            
+            await message.answer("❌ Создание события отменено.")
+    except Exception as e:
+        logger.error(f"Ошибка при отмене создания события: {e}")
         await message.answer("❌ Создание события отменено.")
 
 # Обработчик для получения названия события
@@ -1426,8 +1455,8 @@ async def process_event_confirmation(message: types.Message, state: FSMContext):
             
             success_message += (
                 f"\nID события: {event_id}\n"
-                f"Чтобы присоединиться, используйте команду /join_{event_id}\n"
-                f"Чтобы посмотреть детали, используйте команду /event_{event_id}"
+                f"Чтобы присоединиться, используйте команду /join\\_{event_id}\n"
+                f"Чтобы посмотреть детали, используйте команду /event\\_{event_id}"
             )
             
             await message.answer(success_message, parse_mode="Markdown")
@@ -1567,7 +1596,7 @@ async def cmd_join_event(message: types.Message):
         if success:
             await message.answer(
                 f"✅ Вы успешно присоединились к событию *{event['title']}*.\n"
-                f"Чтобы посмотреть детали, используйте команду /event_{event_id}",
+                f"Чтобы посмотреть детали, используйте команду /event\\_{event_id}",
                 parse_mode="Markdown"
             )
         else:
@@ -1722,20 +1751,29 @@ async def send_event_notifications(bot):
                 
                 notification_text += f"\n👥 *Участники ({len(participants)}):*\n"
                 
-                # Добавляем список участников с тегами для уведомления
-                if participants:
-                    for participant in participants:
-                        if participant['username']:
-                            notification_text += f"@{participant['username']} "
-                
-                notification_text += (
-                    f"\n\nЧтобы посмотреть детали события, используйте команду /event_{event['id']}"
-                )
-                
-                # Отправляем уведомление в чат
+                # Отправляем основное уведомление сначала
                 await bot.send_message(
                     event['chat_id'],
                     notification_text,
+                    parse_mode="Markdown"
+                )
+                
+                # Добавляем список участников с тегами отдельным сообщением
+                if participants:
+                    mentions = ""
+                    for participant in participants:
+                        if participant['username']:
+                            mentions += f"@{participant['username']} "
+                    
+                    if mentions:
+                        # Отправляем упоминания отдельным сообщением без Markdown
+                        await bot.send_message(event['chat_id'], mentions)
+                
+                # Отправляем информацию о командах отдельным сообщением
+                command_text = f"Чтобы посмотреть детали события, используйте команду /event\\_{event['id']}"
+                await bot.send_message(
+                    event['chat_id'],
+                    command_text,
                     parse_mode="Markdown"
                 )
                 
@@ -1765,3 +1803,104 @@ async def schedule_event_notifications():
         except Exception as e:
             logger.error(f"Ошибка в планировщике уведомлений о событиях: {e}")
             await asyncio.sleep(60)  # В случае ошибки ждем 1 минуту
+
+# Сообщения для стимуляции активности
+ACTIVITY_MESSAGES = [
+    "Что-то тихо тут стало! Давайте немного пообщаемся? 💭",
+    "Время для новой темы! Кто хочет начать интересную дискуссию? 🎯",
+    "Эй, как насчет немного оживить чат? 🚀",
+    "Тишина... Но не в нашем чате! Кто готов поделиться чем-нибудь интересным? ✨",
+    "Кажется, все заняты. Но, может, найдется минутка для общения? 🙂"
+]
+
+# Функция для отправки приглашения случайным пользователям, когда чат неактивен
+async def invite_random_users_to_chat(bot):
+    """Приглашает случайных пользователей к общению, если в чате затишье"""
+    try:
+        logger.info("Проверка активности в чатах")
+        
+        # Получаем все чаты
+        chats = await db.get_all_chats()
+        
+        for chat_id, chat_title in chats:
+            try:
+                # Проверяем время последней активности в чате
+                last_message_time = await db.get_last_activity_time(chat_id)
+                
+                if not last_message_time:
+                    logger.info(f"В чате {chat_id} ({chat_title}) нет сообщений")
+                    continue
+                
+                now = datetime.datetime.now()
+                # Преобразуем строку времени в объект datetime
+                try:
+                    last_message_datetime = datetime.datetime.strptime(last_message_time, '%Y-%m-%d %H:%M:%S')
+                except:
+                    # В случае проблем с форматом просто проверяем текущую дату
+                    last_message_datetime = now - datetime.timedelta(minutes=59)  # По умолчанию считаем, что сообщение было недавно
+                
+                # Проверяем прошло ли больше часа с последнего сообщения
+                time_diff = now - last_message_datetime
+                if time_diff.total_seconds() >= 3600:  # 3600 секунд = 1 час
+                    logger.info(f"Чат {chat_id} ({chat_title}) неактивен более часа. Последнее сообщение: {last_message_time}")
+                    
+                    # Получаем случайных 5 пользователей чата
+                    users = await db.get_random_chat_users(chat_id, 5)
+                    
+                    if not users or len(users) < 2:  # Нужно хотя бы 2 пользователя для стимуляции общения
+                        logger.info(f"Недостаточно пользователей в чате {chat_id}")
+                        continue
+                    
+                    # Формируем упоминания пользователей
+                    user_mentions = []
+                    for user_id, username, first_name, last_name in users:
+                        if username:
+                            user_mentions.append(f"@{username}")
+                        else:
+                            # Если нет username, то используем имя
+                            user_name = first_name
+                            if last_name:
+                                user_name += f" {last_name}"
+                            user_mentions.append(user_name)
+                    
+                    # Случайное сообщение для стимуляции активности
+                    activity_message = random.choice(ACTIVITY_MESSAGES)
+                    
+                    # Формируем основное сообщение (без контента)
+                    message = f"{activity_message}\n\n{', '.join(user_mentions)}, как насчёт обсудить что-нибудь интересное?"
+                    
+                    try:
+                        # Отправляем основное сообщение
+                        await bot.send_message(chat_id, message)
+                        
+                        # Добавляем случайную шутку/факт как отдельное сообщение
+                        content = get_random_content()
+                        
+                        if content['type'] == "joke":
+                            content_message = f"{content['emoji']} *Шутка:*\n\n{content['content']}"
+                        elif content['type'] == "fact":
+                            content_message = f"{content['emoji']} *Факт:*\n\n{content['content']}"
+                        elif content['type'] == "tech":
+                            content_message = f"{content['emoji']} *Tech:*\n\n{content['content']}"
+                        
+                        # Отправляем контент отдельным сообщением
+                        await bot.send_message(chat_id, content_message, parse_mode="Markdown")
+                        logger.info(f"Отправлено приглашение к активности в чат {chat_id}")
+                    except Exception as e:
+                        logger.error(f"Ошибка при отправке приглашения в чат {chat_id}: {e}")
+                        # Пробуем отправить без разметки в случае ошибки
+                        try:
+                            await bot.send_message(chat_id, message)
+                        except:
+                            logger.error(f"Не удалось отправить сообщение в чат {chat_id} даже без разметки")
+                else:
+                    logger.debug(f"Чат {chat_id} активен. Последнее сообщение {time_diff.total_seconds()/60:.1f} минут назад")
+            
+            except Exception as e:
+                logger.error(f"Ошибка при проверке активности чата {chat_id}: {e}")
+                continue
+        
+        logger.info("Проверка активности в чатах завершена")
+        
+    except Exception as e:
+        logger.error(f"Критическая ошибка при проверке активности чатов: {e}")

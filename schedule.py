@@ -1,6 +1,7 @@
 import sqlite3
 import datetime
 from typing import List, Dict, Optional, Tuple
+import asyncio
 
 class ScheduleManager:
     def __init__(self, db_path: str):
@@ -48,7 +49,7 @@ class ScheduleManager:
         conn.commit()
         conn.close()
     
-    def add_event(self, chat_id: int, creator_id: int, title: str, 
+    async def add_event(self, chat_id: int, creator_id: int, title: str, 
                  description: Optional[str], event_time: datetime.datetime) -> int:
         """
         Добавляет новое событие в расписание
@@ -63,6 +64,13 @@ class ScheduleManager:
         Returns:
             int: ID созданного события
         """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._add_event_sync, 
+                                         chat_id, creator_id, title, description, event_time)
+    
+    def _add_event_sync(self, chat_id: int, creator_id: int, title: str, 
+                       description: Optional[str], event_time: datetime.datetime) -> int:
+        """Синхронная версия метода add_event"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -78,9 +86,9 @@ class ScheduleManager:
         
         return event_id
     
-    def delete_event(self, event_id: int) -> bool:
+    async def delete_event(self, event_id: int) -> bool:
         """
-        Удаляет событие из расписания
+        Удаляет событие
         
         Args:
             event_id (int): ID события
@@ -88,13 +96,17 @@ class ScheduleManager:
         Returns:
             bool: True если событие удалено, False если не найдено
         """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._delete_event_sync, event_id)
+    
+    def _delete_event_sync(self, event_id: int) -> bool:
+        """Синхронная версия метода delete_event"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
+        # Проверяем существует ли событие
         cursor.execute("SELECT id FROM schedule_events WHERE id = ?", (event_id,))
-        result = cursor.fetchone()
-        
-        if not result:
+        if not cursor.fetchone():
             conn.close()
             return False
         
@@ -104,7 +116,7 @@ class ScheduleManager:
         
         return True
     
-    def get_event(self, event_id: int) -> Optional[Dict]:
+    async def get_event(self, event_id: int) -> Optional[Dict]:
         """
         Возвращает информацию о событии
         
@@ -114,6 +126,11 @@ class ScheduleManager:
         Returns:
             Dict or None: Информация о событии или None, если не найдено
         """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._get_event_sync, event_id)
+    
+    def _get_event_sync(self, event_id: int) -> Optional[Dict]:
+        """Синхронная версия метода get_event"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -147,7 +164,7 @@ class ScheduleManager:
         
         return event
     
-    def get_chat_events(self, chat_id: int, include_past: bool = False) -> List[Dict]:
+    async def get_chat_events(self, chat_id: int, include_past: bool = False) -> List[Dict]:
         """
         Возвращает список событий для чата
         
@@ -158,6 +175,12 @@ class ScheduleManager:
         Returns:
             List[Dict]: Список событий
         """
+        # Используем обычную функцию, но оборачиваем её в асинхронный контекст
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._get_chat_events_sync, chat_id, include_past)
+    
+    def _get_chat_events_sync(self, chat_id: int, include_past: bool = False) -> List[Dict]:
+        """Синхронная версия метода get_chat_events"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -194,7 +217,7 @@ class ScheduleManager:
         
         return events
     
-    def add_participant(self, event_id: int, user_id: int, username: Optional[str] = None) -> bool:
+    async def add_participant(self, event_id: int, user_id: int, username: Optional[str] = None) -> bool:
         """
         Добавляет участника к событию
         
@@ -206,6 +229,11 @@ class ScheduleManager:
         Returns:
             bool: True если участник добавлен, False если событие не найдено или участник уже добавлен
         """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._add_participant_sync, event_id, user_id, username)
+    
+    def _add_participant_sync(self, event_id: int, user_id: int, username: Optional[str] = None) -> bool:
+        """Синхронная версия метода add_participant"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -229,7 +257,7 @@ class ScheduleManager:
             conn.close()
             return False
     
-    def remove_participant(self, event_id: int, user_id: int) -> bool:
+    async def remove_participant(self, event_id: int, user_id: int) -> bool:
         """
         Удаляет участника из события
         
@@ -240,6 +268,11 @@ class ScheduleManager:
         Returns:
             bool: True если участник удален, False если не найден
         """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._remove_participant_sync, event_id, user_id)
+    
+    def _remove_participant_sync(self, event_id: int, user_id: int) -> bool:
+        """Синхронная версия метода remove_participant"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -254,7 +287,7 @@ class ScheduleManager:
         
         return deleted
     
-    def get_upcoming_events(self, within_hours: int = 24) -> List[Dict]:
+    async def get_upcoming_events(self, within_hours: int = 24) -> List[Dict]:
         """
         Возвращает список предстоящих событий, для которых еще не отправлены уведомления
         
@@ -264,6 +297,12 @@ class ScheduleManager:
         Returns:
             List[Dict]: Список предстоящих событий
         """
+        # Используем обычную функцию, но оборачиваем её в асинхронный контекст
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._get_upcoming_events_sync, within_hours)
+    
+    def _get_upcoming_events_sync(self, within_hours: int = 24) -> List[Dict]:
+        """Синхронная версия метода get_upcoming_events"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -283,26 +322,7 @@ class ScheduleManager:
         
         return events
     
-    def mark_notification_sent(self, event_id: int) -> None:
-        """
-        Отмечает, что уведомление о событии отправлено
-        
-        Args:
-            event_id (int): ID события
-        """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-        UPDATE schedule_events
-        SET notification_sent = 1
-        WHERE id = ?
-        ''', (event_id,))
-        
-        conn.commit()
-        conn.close()
-    
-    def get_participants(self, event_id: int) -> List[Dict]:
+    async def get_participants(self, event_id: int) -> List[Dict]:
         """
         Возвращает список участников события
         
@@ -310,8 +330,13 @@ class ScheduleManager:
             event_id (int): ID события
             
         Returns:
-            List[Dict]: Список участников
+            List[Dict]: Список участников события
         """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._get_participants_sync, event_id)
+    
+    def _get_participants_sync(self, event_id: int) -> List[Dict]:
+        """Синхронная версия метода get_participants"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -325,4 +350,28 @@ class ScheduleManager:
         participants = [dict(row) for row in cursor.fetchall()]
         conn.close()
         
-        return participants 
+        return participants
+
+    async def mark_notification_sent(self, event_id: int) -> None:
+        """
+        Отмечает, что уведомление о событии отправлено
+        
+        Args:
+            event_id (int): ID события
+        """
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._mark_notification_sent_sync, event_id)
+    
+    def _mark_notification_sent_sync(self, event_id: int) -> None:
+        """Синхронная версия метода mark_notification_sent"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        UPDATE schedule_events
+        SET notification_sent = 1
+        WHERE id = ?
+        ''', (event_id,))
+        
+        conn.commit()
+        conn.close() 

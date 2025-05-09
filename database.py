@@ -654,6 +654,39 @@ class Database:
             logger.error(f"Ошибка при получении статистики вопросов: {e}")
             return []
 
+    async def get_last_activity_time(self, chat_id):
+        """Получает время последней активности в чате"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    'SELECT MAX(timestamp) FROM activity WHERE chat_id = ?',
+                    (chat_id,)
+                )
+                result = await cursor.fetchone()
+                return result[0] if result and result[0] else None
+        except Exception as e:
+            logger.error(f"Ошибка при получении времени последней активности: {e}")
+            return None
+    
+    async def get_random_chat_users(self, chat_id, limit=5):
+        """Получает случайных пользователей из чата"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Получаем всех пользователей, которые писали в данном чате
+                cursor = await db.execute('''
+                    SELECT DISTINCT u.user_id, u.username, u.first_name, u.last_name
+                    FROM users u
+                    JOIN activity a ON u.user_id = a.user_id
+                    WHERE a.chat_id = ? AND u.username IS NOT NULL
+                    ORDER BY RANDOM()
+                    LIMIT ?
+                ''', (chat_id, limit))
+                
+                return await cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Ошибка при получении случайных пользователей: {e}")
+            return []
+
 
 # Создание экземпляра базы данных
 db = Database()
