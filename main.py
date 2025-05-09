@@ -29,7 +29,13 @@ from games import cmd_emoji_game, cmd_quiz, cmd_end_game, cmd_set_cooldown, Game
 from handlers import (cmd_start, cmd_help, cmd_stats, cmd_top, cmd_challenge, cmd_game_stats, 
                      cmd_chat_info, cmd_admin, cmd_send_to_all, cmd_check_inactive, cmd_send_report, 
                      cmd_send_daily_topic, cmd_active_user_of_day, cmd_empty, on_new_chat_member, process_message,
-                     cmd_send_random_question, cmd_question_stats) # Добавляем новую команду
+                     cmd_send_random_question, cmd_question_stats,
+                     # Новые команды
+                     cmd_joke, cmd_fact, cmd_tech_fact, cmd_random_content,
+                     cmd_schedule, cmd_create_event, cmd_cancel_event_creation,
+                     process_event_title, process_event_description, process_event_date, process_event_time,
+                     process_event_confirmation, cmd_view_event, cmd_join_event, cmd_leave_event, cmd_delete_event,
+                     ScheduleStates, send_event_notifications, schedule_event_notifications)
 
 # Устанавливаем экземпляр бота в модуль handlers
 handlers.set_bot(bot)
@@ -46,6 +52,13 @@ BOT_COMMANDS = [
     types.BotCommand(command="game_stats", description="Статистика игр"),
     types.BotCommand(command="random_question", description="Задать случайный вопрос дня"),
     types.BotCommand(command="question_stats", description="Статистика вопросов дня"),
+    # Новые команды
+    types.BotCommand(command="joke", description="Получить случайную шутку"),
+    types.BotCommand(command="fact", description="Получить интересный факт"),
+    types.BotCommand(command="tech_fact", description="Получить технический факт"),
+    types.BotCommand(command="random_content", description="Случайный контент (шутка/факт)"),
+    types.BotCommand(command="schedule", description="Расписание событий чата"),
+    types.BotCommand(command="create_event", description="Создать новое событие"),
     types.BotCommand(command="empty", description="Очистить список команд бота"),
 ]
 
@@ -194,6 +207,30 @@ dp.register_message_handler(cmd_empty, commands=["empty"])
 dp.register_message_handler(cmd_send_random_question, commands=["random_question"])
 dp.register_message_handler(cmd_question_stats, commands=["question_stats"])
 
+# Новые команды - шутки/факты
+dp.register_message_handler(cmd_joke, commands=["joke"])
+dp.register_message_handler(cmd_fact, commands=["fact"])
+dp.register_message_handler(cmd_tech_fact, commands=["tech_fact"])
+dp.register_message_handler(cmd_random_content, commands=["random_content"])
+
+# Новые команды - расписание событий
+dp.register_message_handler(cmd_schedule, commands=["schedule"])
+dp.register_message_handler(cmd_create_event, commands=["create_event"], state=None)
+dp.register_message_handler(cmd_cancel_event_creation, commands=["cancel"], state=ScheduleStates)
+
+# Обработчики состояний для создания события
+dp.register_message_handler(process_event_title, state=ScheduleStates.waiting_for_title)
+dp.register_message_handler(process_event_description, state=ScheduleStates.waiting_for_description)
+dp.register_message_handler(process_event_date, state=ScheduleStates.waiting_for_date)
+dp.register_message_handler(process_event_time, state=ScheduleStates.waiting_for_time)
+dp.register_message_handler(process_event_confirmation, state=ScheduleStates.confirm_event)
+
+# Обработчики команд для работы с событиями
+dp.register_message_handler(cmd_view_event, regexp=r"^/event_\d+$")
+dp.register_message_handler(cmd_join_event, regexp=r"^/join_\d+$")
+dp.register_message_handler(cmd_leave_event, regexp=r"^/leave_\d+$")
+dp.register_message_handler(cmd_delete_event, regexp=r"^/delete_event_\d+$")
+
 # Административные команды
 dp.register_message_handler(cmd_chat_info, commands=["chat_info"])
 dp.register_message_handler(cmd_admin, commands=["admin"])
@@ -245,6 +282,7 @@ async def on_startup(dispatcher):
     await scheduler.spawn(schedule_daily_topics())
     await scheduler.spawn(schedule_active_user_of_day())
     await scheduler.spawn(schedule_random_questions())
+    await scheduler.spawn(schedule_event_notifications())
     
     logger.info("Планировщик регулярных задач успешно запущен")
 

@@ -7,14 +7,30 @@ import asyncio
 import random
 import traceback
 import aiosqlite
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.dispatcher.filters import Text
 
-from config import POINTS_PER_MESSAGE, POINTS_PER_REPLY, ADMIN_ID, INACTIVITY_THRESHOLD_DAYS, BOT_USERNAME
+from config import POINTS_PER_MESSAGE, POINTS_PER_REPLY, ADMIN_ID, INACTIVITY_THRESHOLD_DAYS, BOT_USERNAME, DB_PATH
 from database import db
+from jokes_facts import get_random_content
+from schedule import ScheduleManager
 
 logger = logging.getLogger(__name__)
 
+# Создаем экземпляр менеджера расписания
+schedule_manager = ScheduleManager(DB_PATH)
+
 # Объявляем переменную bot, которая будет установлена из main.py
 bot = None
+
+# Состояния для FSM при создании события
+class ScheduleStates(StatesGroup):
+    waiting_for_title = State()
+    waiting_for_description = State()
+    waiting_for_date = State()
+    waiting_for_time = State()
+    confirm_event = State()
 
 # Функция для установки бота из main.py
 def set_bot(bot_instance):
@@ -992,13 +1008,34 @@ def register_handlers(dp):
     dp.register_message_handler(cmd_game_stats, commands=["game_stats"])
     dp.register_message_handler(cmd_empty, commands=["empty"])
     
+    # Новые команды - шутки и факты
+    dp.register_message_handler(cmd_joke, commands=["joke"])
+    dp.register_message_handler(cmd_fact, commands=["fact"])
+    dp.register_message_handler(cmd_tech_fact, commands=["tech_fact"])
+    dp.register_message_handler(cmd_random_content, commands=["random_content"])
+    
+    # Новые команды - расписание событий
+    dp.register_message_handler(cmd_schedule, commands=["schedule"])
+    dp.register_message_handler(cmd_create_event, commands=["create_event"])
+    dp.register_message_handler(cmd_cancel_event_creation, commands=["cancel"], state=ScheduleStates)
+    
+    # Регистрация обработчиков состояний для создания события
+    dp.register_message_handler(process_event_title, state=ScheduleStates.waiting_for_title)
+    dp.register_message_handler(process_event_description, state=ScheduleStates.waiting_for_description)
+    dp.register_message_handler(process_event_date, state=ScheduleStates.waiting_for_date)
+    dp.register_message_handler(process_event_time, state=ScheduleStates.waiting_for_time)
+    dp.register_message_handler(process_event_confirmation, state=ScheduleStates.confirm_event)
+    
+    # Регистрация обработчиков команд для работы с событиями
+    dp.register_message_handler(cmd_view_event, regexp=r"^/event_\d+$")
+    dp.register_message_handler(cmd_join_event, regexp=r"^/join_\d+$")
+    dp.register_message_handler(cmd_leave_event, regexp=r"^/leave_\d+$")
+    dp.register_message_handler(cmd_delete_event, regexp=r"^/delete_event_\d+$")
+    
     # Административные команды
     dp.register_message_handler(cmd_chat_info, commands=["chat_info"])
     dp.register_message_handler(cmd_admin, commands=["admin"])
     dp.register_message_handler(cmd_send_to_all, commands=["send_to_all"])
-    
-    # Обработчик новых участников в чате
-    dp.register_message_handler(on_new_chat_member, content_types=types.ContentTypes.NEW_CHAT_MEMBERS)
     
     # Добавляем обработчик команды проверки неактивных
     dp.register_message_handler(cmd_check_inactive, Command("check_inactive"))
@@ -1011,6 +1048,9 @@ def register_handlers(dp):
     
     # Добавляем обработчик команды активного пользователя
     dp.register_message_handler(cmd_active_user_of_day, Command("active_user_of_day"))
+    
+    # Обработчик новых участников в чате
+    dp.register_message_handler(on_new_chat_member, content_types=types.ContentTypes.NEW_CHAT_MEMBERS)
     
     # Обработчик для всех остальных сообщений регистрируем в последнюю очередь
     dp.register_message_handler(process_message)
@@ -1110,4 +1150,618 @@ async def cmd_question_stats(message: types.Message):
         
         response += "\n"
     
-    await message.answer(response, parse_mode=types.ParseMode.MARKDOWN) 
+    await message.answer(response, parse_mode=types.ParseMode.MARKDOWN)
+
+# Обработчик команды /joke - получение случайной шутки
+async def cmd_joke(message: types.Message):
+    """Отправляет случайную шутку"""
+    content = get_random_content("joke")
+    await message.answer(f"{content['emoji']} *Шутка:*\n\n{content['content']}", parse_mode="Markdown")
+
+# Обработчик команды /fact - получение случайного факта
+async def cmd_fact(message: types.Message):
+    """Отправляет случайный интересный факт"""
+    content = get_random_content("fact")
+    await message.answer(f"{content['emoji']} *Интересный факт:*\n\n{content['content']}", parse_mode="Markdown")
+
+# Обработчик команды /tech_fact - получение случайного технического факта
+async def cmd_tech_fact(message: types.Message):
+    """Отправляет случайный технический факт"""
+    content = get_random_content("tech")
+    await message.answer(f"{content['emoji']} *Технический факт:*\n\n{content['content']}", parse_mode="Markdown")
+
+# Обработчик команды /random_content - получение случайного контента (шутка или факт)
+async def cmd_random_content(message: types.Message):
+    """Отправляет случайный контент - шутку или факт"""
+    content = get_random_content()
+    
+    if content['type'] == "joke":
+        await message.answer(f"{content['emoji']} *Случайная шутка:*\n\n{content['content']}", parse_mode="Markdown")
+    elif content['type'] == "fact":
+        await message.answer(f"{content['emoji']} *Случайный факт:*\n\n{content['content']}", parse_mode="Markdown")
+    elif content['type'] == "tech":
+        await message.answer(f"{content['emoji']} *Случайный технический факт:*\n\n{content['content']}", parse_mode="Markdown")
+
+# Обработчик команды /schedule - просмотр расписания событий чата
+async def cmd_schedule(message: types.Message):
+    """Показывает расписание предстоящих событий в чате"""
+    chat_id = message.chat.id
+    
+    # Получаем список предстоящих событий
+    events = await schedule_manager.get_chat_events(chat_id)
+    
+    if not events:
+        await message.answer(
+            "📅 *Расписание событий*\n\n"
+            "В этом чате пока нет запланированных событий.\n\n"
+            "Чтобы создать новое событие, используйте команду /create_event",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Формируем список событий
+    response = "📅 *Расписание предстоящих событий:*\n\n"
+    
+    for i, event in enumerate(events, 1):
+        # Преобразуем время в читаемый формат
+        event_time = datetime.datetime.fromisoformat(event['event_time'])
+        formatted_date = event_time.strftime("%d.%m.%Y")
+        formatted_time = event_time.strftime("%H:%M")
+        
+        # Формируем описание события
+        response += f"*{i}. {event['title']}*\n"
+        response += f"📆 Дата: {formatted_date}\n"
+        response += f"🕒 Время: {formatted_time}\n"
+        
+        if event['description']:
+            response += f"📝 Описание: {event['description']}\n"
+        
+        response += f"👥 Участников: {event['participant_count']}\n"
+        response += f"/join_{event['id']} - присоединиться\n"
+        response += f"/event_{event['id']} - подробнее\n\n"
+    
+    response += "Чтобы создать новое событие, используйте команду /create_event"
+    
+    await message.answer(response, parse_mode="Markdown")
+
+# Обработчик команды /create_event - создание нового события
+async def cmd_create_event(message: types.Message, state: FSMContext):
+    """Начинает процесс создания нового события"""
+    # Проверяем, что команда вызвана в групповом чате
+    if message.chat.type == "private":
+        await message.answer(
+            "ℹ️ Создавать события можно только в групповых чатах.\n"
+            "Перейдите в чат группы и используйте там команду /create_event"
+        )
+        return
+    
+    await ScheduleStates.waiting_for_title.set()
+    await state.update_data(chat_id=message.chat.id, creator_id=message.from_user.id)
+    
+    await message.answer(
+        "📅 *Создание нового события*\n\n"
+        "Шаг 1/4: Введите название события (до 100 символов)\n\n"
+        "Чтобы отменить создание, отправьте /cancel",
+        parse_mode="Markdown"
+    )
+
+# Обработчик отмены создания события
+async def cmd_cancel_event_creation(message: types.Message, state: FSMContext):
+    """Отменяет процесс создания нового события"""
+    current_state = await state.get_state()
+    
+    if current_state is None:
+        return
+    
+    # Если пользователь находится в одном из состояний создания события
+    if current_state.startswith('ScheduleStates'):
+        await state.finish()
+        await message.answer("❌ Создание события отменено.")
+
+# Обработчик для получения названия события
+async def process_event_title(message: types.Message, state: FSMContext):
+    """Обрабатывает ввод названия события"""
+    title = message.text.strip()
+    
+    # Проверка длины названия
+    if len(title) > 100:
+        await message.answer(
+            "⚠️ Название слишком длинное. Пожалуйста, введите название до 100 символов."
+        )
+        return
+    
+    # Сохраняем название и переходим к следующему шагу
+    await state.update_data(title=title)
+    await ScheduleStates.waiting_for_description.set()
+    
+    await message.answer(
+        "📝 *Шаг 2/4: Введите описание события*\n\n"
+        "Это поле необязательное. Если вы не хотите добавлять описание, отправьте '-'.\n\n"
+        "Чтобы отменить создание, отправьте /cancel",
+        parse_mode="Markdown"
+    )
+
+# Обработчик для получения описания события
+async def process_event_description(message: types.Message, state: FSMContext):
+    """Обрабатывает ввод описания события"""
+    description = message.text.strip()
+    
+    # Если пользователь не хочет добавлять описание
+    if description == "-":
+        description = None
+    
+    # Сохраняем описание и переходим к следующему шагу
+    await state.update_data(description=description)
+    await ScheduleStates.waiting_for_date.set()
+    
+    await message.answer(
+        "📆 *Шаг 3/4: Введите дату события*\n\n"
+        "Формат: ДД.ММ.ГГГГ (например, 25.12.2023)\n\n"
+        "Чтобы отменить создание, отправьте /cancel",
+        parse_mode="Markdown"
+    )
+
+# Обработчик для получения даты события
+async def process_event_date(message: types.Message, state: FSMContext):
+    """Обрабатывает ввод даты события"""
+    date_str = message.text.strip()
+    
+    try:
+        # Пытаемся преобразовать строку в дату
+        event_date = datetime.datetime.strptime(date_str, "%d.%m.%Y").date()
+        
+        # Проверяем, что дата не в прошлом
+        if event_date < datetime.date.today():
+            await message.answer(
+                "⚠️ Дата не может быть в прошлом. Пожалуйста, введите корректную дату."
+            )
+            return
+        
+        # Сохраняем дату и переходим к следующему шагу
+        await state.update_data(event_date=event_date)
+        await ScheduleStates.waiting_for_time.set()
+        
+        await message.answer(
+            "🕒 *Шаг 4/4: Введите время события*\n\n"
+            "Формат: ЧЧ:ММ (например, 18:30)\n\n"
+            "Чтобы отменить создание, отправьте /cancel",
+            parse_mode="Markdown"
+        )
+        
+    except ValueError:
+        await message.answer(
+            "⚠️ Неверный формат даты. Пожалуйста, используйте формат ДД.ММ.ГГГГ (например, 25.12.2023)"
+        )
+
+# Обработчик для получения времени события
+async def process_event_time(message: types.Message, state: FSMContext):
+    """Обрабатывает ввод времени события"""
+    time_str = message.text.strip()
+    
+    try:
+        # Пытаемся преобразовать строку во время
+        event_time = datetime.datetime.strptime(time_str, "%H:%M").time()
+        
+        # Получаем данные из состояния
+        data = await state.get_data()
+        event_date = data['event_date']
+        
+        # Объединяем дату и время
+        full_datetime = datetime.datetime.combine(event_date, event_time)
+        
+        # Проверяем, что дата и время не в прошлом
+        if full_datetime < datetime.datetime.now():
+            await message.answer(
+                "⚠️ Время события не может быть в прошлом. Пожалуйста, введите корректное время."
+            )
+            return
+        
+        # Сохраняем полное время и переходим к подтверждению
+        await state.update_data(event_datetime=full_datetime)
+        await ScheduleStates.confirm_event.set()
+        
+        # Формируем сообщение для подтверждения
+        confirm_message = (
+            "📋 *Подтвердите создание события:*\n\n"
+            f"Название: {data['title']}\n"
+        )
+        
+        if data['description']:
+            confirm_message += f"Описание: {data['description']}\n"
+        
+        confirm_message += (
+            f"Дата: {event_date.strftime('%d.%m.%Y')}\n"
+            f"Время: {event_time.strftime('%H:%M')}\n\n"
+            "Для подтверждения отправьте 'Подтвердить'.\n"
+            "Для отмены отправьте 'Отмена' или /cancel"
+        )
+        
+        await message.answer(confirm_message, parse_mode="Markdown")
+        
+    except ValueError:
+        await message.answer(
+            "⚠️ Неверный формат времени. Пожалуйста, используйте формат ЧЧ:ММ (например, 18:30)"
+        )
+
+# Обработчик для подтверждения создания события
+async def process_event_confirmation(message: types.Message, state: FSMContext):
+    """Обрабатывает подтверждение создания события"""
+    response = message.text.strip().lower()
+    
+    if response == "подтвердить":
+        # Получаем все данные из состояния
+        data = await state.get_data()
+        
+        try:
+            # Создаем событие в базе данных
+            event_id = await schedule_manager.add_event(
+                data['chat_id'],
+                data['creator_id'],
+                data['title'],
+                data['description'],
+                data['event_datetime']
+            )
+            
+            # Добавляем создателя как первого участника
+            await schedule_manager.add_participant(
+                event_id,
+                data['creator_id'],
+                message.from_user.username
+            )
+            
+            # Отправляем уведомление о создании события
+            event_time = data['event_datetime']
+            formatted_date = event_time.strftime("%d.%m.%Y")
+            formatted_time = event_time.strftime("%H:%M")
+            
+            success_message = (
+                "✅ *Событие успешно создано!*\n\n"
+                f"📌 *{data['title']}*\n"
+                f"📆 Дата: {formatted_date}\n"
+                f"🕒 Время: {formatted_time}\n"
+            )
+            
+            if data['description']:
+                success_message += f"📝 Описание: {data['description']}\n"
+            
+            success_message += (
+                f"\nID события: {event_id}\n"
+                f"Чтобы присоединиться, используйте команду /join_{event_id}\n"
+                f"Чтобы посмотреть детали, используйте команду /event_{event_id}"
+            )
+            
+            await message.answer(success_message, parse_mode="Markdown")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при создании события: {e}")
+            await message.answer(
+                "❌ Произошла ошибка при создании события. Пожалуйста, попробуйте еще раз."
+            )
+            
+        finally:
+            # Завершаем состояние в любом случае
+            await state.finish()
+            
+    elif response == "отмена":
+        await state.finish()
+        await message.answer("❌ Создание события отменено.")
+    else:
+        await message.answer(
+            "⚠️ Пожалуйста, отправьте 'Подтвердить' для создания события или 'Отмена' для отмены."
+        )
+
+# Обработчик для просмотра деталей события по команде /event_ID
+async def cmd_view_event(message: types.Message):
+    """Показывает подробную информацию о событии"""
+    # Извлекаем ID события из команды
+    command_parts = message.text.split('_')
+    if len(command_parts) != 2:
+        return
+    
+    try:
+        event_id = int(command_parts[1])
+        
+        # Получаем информацию о событии
+        event = await schedule_manager.get_event(event_id)
+        
+        if not event:
+            await message.answer("⚠️ Событие не найдено или было удалено.")
+            return
+        
+        # Проверяем, что событие принадлежит этому чату
+        if event['chat_id'] != message.chat.id:
+            return
+        
+        # Преобразуем время в читаемый формат
+        event_time = datetime.datetime.fromisoformat(event['event_time'])
+        formatted_date = event_time.strftime("%d.%m.%Y")
+        formatted_time = event_time.strftime("%H:%M")
+        
+        # Формируем подробное описание события
+        response = f"📌 *{event['title']}*\n\n"
+        
+        if event['description']:
+            response += f"📝 *Описание:* {event['description']}\n\n"
+        
+        response += (
+            f"📆 *Дата:* {formatted_date}\n"
+            f"🕒 *Время:* {formatted_time}\n"
+        )
+        
+        # Добавляем информацию о создателе
+        # Для этого нужно получить данные о пользователе из базы
+        creator_info = f"👤 *Организатор:* {event['creator_id']}\n\n"
+        try:
+            creator = await bot.get_chat_member(message.chat.id, event['creator_id'])
+            if creator and creator.user:
+                creator_name = creator.user.full_name
+                creator_username = f" (@{creator.user.username})" if creator.user.username else ""
+                creator_info = f"👤 *Организатор:* {creator_name}{creator_username}\n\n"
+        except Exception as e:
+            logger.error(f"Ошибка при получении информации о создателе события: {e}")
+        
+        response += creator_info
+        
+        # Добавляем список участников
+        participants = event['participants']
+        participant_count = len(participants)
+        
+        response += f"👥 *Участники ({participant_count}):*\n"
+        
+        if participant_count > 0:
+            for i, participant in enumerate(participants, 1):
+                username = participant['username'] or f"ID: {participant['user_id']}"
+                response += f"{i}. {username}\n"
+        else:
+            response += "Пока никто не присоединился.\n"
+        
+        # Добавляем кнопки действий
+        response += (
+            f"\n/join_{event_id} - присоединиться к событию\n"
+            f"/leave_{event_id} - отказаться от участия\n"
+        )
+        
+        # Если пользователь является создателем события, добавляем кнопку удаления
+        if message.from_user.id == event['creator_id'] or message.from_user.id in ADMIN_ID:
+            response += f"/delete_event_{event_id} - удалить событие\n"
+        
+        await message.answer(response, parse_mode="Markdown")
+        
+    except (ValueError, KeyError) as e:
+        logger.error(f"Ошибка при просмотре события: {e}")
+        await message.answer("⚠️ Произошла ошибка при получении информации о событии.")
+
+# Обработчик для присоединения к событию по команде /join_ID
+async def cmd_join_event(message: types.Message):
+    """Позволяет пользователю присоединиться к событию"""
+    # Извлекаем ID события из команды
+    command_parts = message.text.split('_')
+    if len(command_parts) != 2:
+        return
+    
+    try:
+        event_id = int(command_parts[1])
+        user_id = message.from_user.id
+        username = message.from_user.username
+        
+        # Получаем информацию о событии для проверки
+        event = await schedule_manager.get_event(event_id)
+        
+        if not event:
+            await message.answer("⚠️ Событие не найдено или было удалено.")
+            return
+        
+        # Проверяем, что событие принадлежит этому чату
+        if event['chat_id'] != message.chat.id:
+            return
+        
+        # Проверяем, не присоединился ли пользователь уже
+        for participant in event['participants']:
+            if participant['user_id'] == user_id:
+                await message.answer("ℹ️ Вы уже присоединились к этому событию.")
+                return
+        
+        # Добавляем пользователя как участника
+        success = await schedule_manager.add_participant(event_id, user_id, username)
+        
+        if success:
+            await message.answer(
+                f"✅ Вы успешно присоединились к событию *{event['title']}*.\n"
+                f"Чтобы посмотреть детали, используйте команду /event_{event_id}",
+                parse_mode="Markdown"
+            )
+        else:
+            await message.answer(
+                "❌ Не удалось присоединиться к событию. Возможно, оно было удалено."
+            )
+            
+    except (ValueError, KeyError) as e:
+        logger.error(f"Ошибка при присоединении к событию: {e}")
+        await message.answer("⚠️ Произошла ошибка при присоединении к событию.")
+
+# Обработчик для отказа от участия в событии по команде /leave_ID
+async def cmd_leave_event(message: types.Message):
+    """Позволяет пользователю отказаться от участия в событии"""
+    # Извлекаем ID события из команды
+    command_parts = message.text.split('_')
+    if len(command_parts) != 2:
+        return
+    
+    try:
+        event_id = int(command_parts[1])
+        user_id = message.from_user.id
+        
+        # Получаем информацию о событии для проверки
+        event = await schedule_manager.get_event(event_id)
+        
+        if not event:
+            await message.answer("⚠️ Событие не найдено или было удалено.")
+            return
+        
+        # Проверяем, что событие принадлежит этому чату
+        if event['chat_id'] != message.chat.id:
+            return
+        
+        # Проверяем, является ли пользователь создателем события
+        if event['creator_id'] == user_id:
+            await message.answer(
+                "⚠️ Вы являетесь организатором этого события и не можете отказаться от участия.\n"
+                f"Если вы хотите отменить событие, используйте команду /delete_event_{event_id}"
+            )
+            return
+        
+        # Удаляем пользователя из участников
+        success = await schedule_manager.remove_participant(event_id, user_id)
+        
+        if success:
+            await message.answer(
+                f"✅ Вы успешно отказались от участия в событии *{event['title']}*.",
+                parse_mode="Markdown"
+            )
+        else:
+            await message.answer(
+                "ℹ️ Вы не являетесь участником этого события."
+            )
+            
+    except (ValueError, KeyError) as e:
+        logger.error(f"Ошибка при отказе от участия в событии: {e}")
+        await message.answer("⚠️ Произошла ошибка при отказе от участия в событии.")
+
+# Обработчик для удаления события по команде /delete_event_ID
+async def cmd_delete_event(message: types.Message):
+    """Позволяет создателю или администратору удалить событие"""
+    # Извлекаем ID события из команды
+    command_parts = message.text.split('_')
+    if len(command_parts) != 3:
+        return
+    
+    try:
+        event_id = int(command_parts[2])
+        user_id = message.from_user.id
+        
+        # Получаем информацию о событии для проверки
+        event = await schedule_manager.get_event(event_id)
+        
+        if not event:
+            await message.answer("⚠️ Событие не найдено или уже было удалено.")
+            return
+        
+        # Проверяем, что событие принадлежит этому чату
+        if event['chat_id'] != message.chat.id:
+            return
+        
+        # Проверяем права на удаление (создатель или администратор)
+        if event['creator_id'] != user_id and user_id not in ADMIN_ID:
+            await message.answer(
+                "⚠️ У вас нет прав для удаления этого события.\n"
+                "Только организатор события или администратор может его удалить."
+            )
+            return
+        
+        # Удаляем событие
+        success = await schedule_manager.delete_event(event_id)
+        
+        if success:
+            await message.answer(
+                f"✅ Событие *{event['title']}* успешно удалено.",
+                parse_mode="Markdown"
+            )
+        else:
+            await message.answer(
+                "❌ Не удалось удалить событие. Пожалуйста, попробуйте еще раз."
+            )
+            
+    except (ValueError, KeyError) as e:
+        logger.error(f"Ошибка при удалении события: {e}")
+        await message.answer("⚠️ Произошла ошибка при удалении события.")
+
+# Функция для отправки уведомлений о предстоящих событиях
+async def send_event_notifications(bot):
+    """Отправляет уведомления о предстоящих событиях"""
+    try:
+        logger.info("Проверка предстоящих событий для отправки уведомлений")
+        
+        # Получаем события, которые произойдут в ближайшие 6 часов
+        upcoming_events = await schedule_manager.get_upcoming_events(within_hours=6)
+        
+        if not upcoming_events:
+            logger.info("Нет предстоящих событий для уведомления")
+            return
+        
+        logger.info(f"Найдено {len(upcoming_events)} предстоящих событий для уведомления")
+        
+        for event in upcoming_events:
+            try:
+                # Получаем список участников
+                participants = await schedule_manager.get_participants(event['id'])
+                
+                # Преобразуем время события в удобный формат
+                event_time = datetime.datetime.fromisoformat(event['event_time'])
+                formatted_date = event_time.strftime("%d.%m.%Y")
+                formatted_time = event_time.strftime("%H:%M")
+                
+                # Вычисляем, сколько времени осталось до события
+                now = datetime.datetime.now()
+                time_left = event_time - now
+                hours_left = time_left.seconds // 3600
+                minutes_left = (time_left.seconds % 3600) // 60
+                
+                time_remaining = f"{hours_left} ч {minutes_left} мин"
+                
+                # Формируем текст уведомления
+                notification_text = (
+                    f"⏰ *Напоминание о предстоящем событии!*\n\n"
+                    f"📌 *{event['title']}*\n"
+                    f"📆 Дата: {formatted_date}\n"
+                    f"🕒 Время: {formatted_time}\n"
+                    f"⏳ Осталось: {time_remaining}\n"
+                )
+                
+                if event['description']:
+                    notification_text += f"📝 Описание: {event['description']}\n"
+                
+                notification_text += f"\n👥 *Участники ({len(participants)}):*\n"
+                
+                # Добавляем список участников с тегами для уведомления
+                if participants:
+                    for participant in participants:
+                        if participant['username']:
+                            notification_text += f"@{participant['username']} "
+                
+                notification_text += (
+                    f"\n\nЧтобы посмотреть детали события, используйте команду /event_{event['id']}"
+                )
+                
+                # Отправляем уведомление в чат
+                await bot.send_message(
+                    event['chat_id'],
+                    notification_text,
+                    parse_mode="Markdown"
+                )
+                
+                # Отмечаем, что уведомление отправлено
+                await schedule_manager.mark_notification_sent(event['id'])
+                
+                logger.info(f"Отправлено уведомление о событии ID {event['id']} в чат {event['chat_id']}")
+                
+            except Exception as e:
+                logger.error(f"Ошибка при отправке уведомления о событии {event['id']}: {e}")
+        
+        logger.info("Проверка и отправка уведомлений о событиях завершена")
+        
+    except Exception as e:
+        logger.error(f"Критическая ошибка при отправке уведомлений о событиях: {e}")
+
+# Функция планировщика для отправки уведомлений о предстоящих событиях
+async def schedule_event_notifications():
+    """Планировщик для регулярной проверки и отправки уведомлений о событиях"""
+    while True:
+        try:
+            # Проверяем и отправляем уведомления
+            await send_event_notifications(bot)
+            
+            # Проверяем каждые 30 минут
+            await asyncio.sleep(30 * 60)
+        except Exception as e:
+            logger.error(f"Ошибка в планировщике уведомлений о событиях: {e}")
+            await asyncio.sleep(60)  # В случае ошибки ждем 1 минуту
