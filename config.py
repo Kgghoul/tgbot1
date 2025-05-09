@@ -21,6 +21,9 @@ admin_ids_str = os.getenv("ADMIN_IDS", "")
 if admin_ids_str:
     ADMIN_ID.extend([int(admin_id) for admin_id in admin_ids_str.split(",") if admin_id])
 
+# Для обратной совместимости - оба имени переменных должны работать
+ADMIN_IDS = ADMIN_ID  # Важно: это ссылка на тот же список, а не копия
+
 # Настройки базы данных
 DB_PATH = os.getenv('DB_PATH', 'activity_bot.db')
 

@@ -441,7 +441,7 @@ async def cmd_emoji_game(message: types.Message, state: FSMContext):
         logger.debug(f"Сообщение отправлено пользователю {user_id}")
         
         # Устанавливаем состояние и данные
-        await state.update_data(attempts=3, riddle=riddle, answer=emoji_game.current_answer)
+        await state.update_data(attempts=0, riddle=riddle, answer=emoji_game.current_answer)
         await GameStates.emoji_game.set()
         logger.info(f"Состояние GameStates.emoji_game установлено для пользователя {user_id}")
         
@@ -615,10 +615,16 @@ async def cmd_quiz(message: types.Message, state: FSMContext):
         formatted_question = quiz_game.get_formatted_question()
         
         # Сохраняем данные вопроса в состоянии для восстановления при необходимости
+        # Важно: сохраняем правильный ответ в виде текста для последующей проверки
+        correct_index = question["correct"]
+        correct_answer = question["options"][correct_index]
+        
         await state.update_data(
             question=question["question"],
             options=question["options"],
-            correct=question["correct"]
+            correct=question["correct"],
+            correct_answer=correct_answer,
+            attempts=0
         )
         
         await message.answer(
@@ -643,21 +649,50 @@ async def process_quiz_answer(message: types.Message, state: FSMContext):
         chat_id = message.chat.id
         logger.info(f"Получен ответ от пользователя {user_id} в состоянии quiz: {message.text}")
         
-        user_answer = message.text
+        user_answer = message.text.strip()
         user_data = await state.get_data()
         question = user_data.get('question')
+        options = user_data.get('options', [])
+        correct = user_data.get('correct')
         correct_answer = user_data.get('correct_answer')
         attempts = user_data.get('attempts', 0)
         
         # Проверка что данные вопроса корректно установлены
-        if not question or not correct_answer:
+        if not question or not correct_answer or correct is None or not options:
             logger.error(f"Данные вопроса некорректны, перезапускаем викторину")
             await message.answer("Произошла ошибка с текущим вопросом. Начните викторину заново командой /quiz")
             await safe_finish_state(state)
             return
         
-        # Проверка ответа (игнорируя регистр и лишние пробелы)
-        if user_answer.lower().strip() == correct_answer.lower().strip():
+        # Проверяем, является ли ответ числом от 1 до len(options)
+        is_valid_option = False
+        option_index = -1
+        
+        try:
+            # Проверяем, ввел ли пользователь число
+            if user_answer.isdigit():
+                option_index = int(user_answer) - 1  # Преобразуем в 0-индексированный
+                if 0 <= option_index < len(options):
+                    is_valid_option = True
+            
+            # Если ответ не число, проверяем, может быть пользователь ввел текст ответа
+            if not is_valid_option:
+                # Проверяем, не ввел ли пользователь сам ответ текстом
+                for i, option in enumerate(options):
+                    if user_answer.lower() == option.lower():
+                        option_index = i
+                        is_valid_option = True
+                        break
+        except:
+            is_valid_option = False
+        
+        # Если ответ не является корректным вариантом
+        if not is_valid_option:
+            await message.answer(f"❗ Пожалуйста, ответьте цифрой от 1 до {len(options)} или введите текст варианта ответа.")
+            return
+        
+        # Проверка правильности ответа
+        if option_index == correct:
             # Правильный ответ
             points = max(3.0 - attempts * 0.5, 1.0)  # Меньше баллов за больше попыток
             success, rank_info = await db.add_game_activity(chat_id, user_id, 'quiz', points)
@@ -704,14 +739,18 @@ async def process_quiz_answer(message: types.Message, state: FSMContext):
             # Обновляем количество попыток
             await state.update_data(attempts=attempts)
             
+            # Получаем текст выбранного (неправильного) варианта
+            chosen_option = options[option_index]
+            
             # Разные ответы в зависимости от количества попыток
             if attempts < 3:
-                await message.answer(f"❌ Неправильно! Попробуйте еще раз. Попытка {attempts}/3")
+                await message.answer(f"❌ Неправильно! Вы выбрали: {chosen_option}\nПопробуйте еще раз. Попытка {attempts}/3")
             else:
                 # Если исчерпаны все попытки, показываем ответ
                 await message.answer(
                     f"⛔ Попытки закончились!\n\n"
                     f"Вопрос: {question}\n"
+                    f"Вы выбрали: {chosen_option}\n"
                     f"Правильный ответ: {correct_answer}"
                 )
                 
@@ -745,7 +784,8 @@ async def process_quiz_answer(message: types.Message, state: FSMContext):
                     await cmd_quiz(message, state)
     
     except Exception as e:
-        logger.error(f"Ошибка при обработке ответа в викторине: {e}")
+        error_traceback = traceback.format_exc()
+        logger.error(f"Ошибка при обработке ответа в викторине: {e}\n{error_traceback}")
         await message.answer("Произошла ошибка при обработке ответа. Пожалуйста, начните викторину заново.")
         await safe_finish_state(state)
 
@@ -799,7 +839,15 @@ async def cmd_set_cooldown(message: types.Message):
 
 # Регистрация обработчиков игровых команд
 def register_game_handlers(dp):
-    logger.info("Регистрация игровых обработчиков")
+    """
+    ВАЖНО: Эта функция больше не используется.
+    Регистрация игровых обработчиков происходит напрямую в main.py 
+    для предотвращения циклических зависимостей.
+    Функция оставлена для документации и обратной совместимости
+    """
+    logger.info("Функция register_game_handlers устарела. Обработчики регистрируются напрямую в main.py")
+    # ВНИМАНИЕ: Код ниже не выполняется, так как эта функция больше не используется
+    # Оставлен для документации и обратной совместимости
     try:
         # Регистрируем игровые команды ПЕРЕД обработчиками состояний
         dp.register_message_handler(cmd_emoji_game, commands=["emoji_game"])
