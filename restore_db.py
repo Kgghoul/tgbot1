@@ -288,87 +288,58 @@ def add_activity(chat_id, user_id, points, message_count):
     logger.info(f"Добавлено {message_count} записей активности для пользователя {user_id}")
 
 def parse_top_users_data(data):
-    """Парсит данные топ пользователей из текста"""
+    """Парсит данные из сообщения с топ пользователями"""
     users = []
     
-    # Регулярное выражение для извлечения информации о пользователях
-    pattern = r"(\d+)\.\s+(.*?)\s+\(@(.*?)\)\s+⭐\s+([\d.]+)\s+баллов\s+\|\s+💬\s+(\d+)\s+сообщений\s+🏆\s+Ранг:\s+(.*?)$"
+    # Если data уже список, используем его, иначе разбиваем строку на строки
+    if isinstance(data, list):
+        lines = data
+    else:
+        # Убеждаемся, что data - строка
+        data_str = str(data)
+        lines = data_str.strip().split('\n')
     
-    # Специальная обработка для медальных мест
-    medal_pattern = r"🥇|🥈|🥉"
+    # Находим строки с информацией о пользователях
+    current_user = None
     
-    lines = data.strip().split('\n')
-    i = 0
-    
-    while i < len(lines):
-        line = lines[i].strip()
-        
-        # Пропускаем заголовок
-        if "Топ 10 активных участников" in line:
-            i += 1
+    for line in lines:
+        line = line.strip()
+        if not line:
             continue
-        
-        # Проверяем, есть ли в строке информация о пользователе
-        if "@" in line:
-            # Обрабатываем медальное место
-            if re.search(medal_pattern, line):
-                # Для медальных мест информация разделена на 3 строки
-                if i + 2 < len(lines):
-                    name_line = line
-                    points_line = lines[i + 1].strip()
-                    rank_line = lines[i + 2].strip()
-                    
-                    # Извлекаем имя и username
-                    name_match = re.search(r"(🥇|🥈|🥉)\s+(.*?)\s+\(@(.*?)\)", name_line)
-                    if name_match:
-                        position = "1" if "🥇" in name_match.group(1) else ("2" if "🥈" in name_match.group(1) else "3")
-                        name = name_match.group(2)
-                        username = name_match.group(3)
-                        
-                        # Извлекаем баллы и сообщения
-                        points_match = re.search(r"⭐\s+([\d.]+)\s+баллов\s+\|\s+💬\s+(\d+)\s+сообщений", points_line)
-                        if points_match:
-                            points = float(points_match.group(1))
-                            messages = int(points_match.group(2))
-                            
-                            # Извлекаем ранг
-                            rank_match = re.search(r"🏆\s+Ранг:\s+(.*?)$", rank_line)
-                            if rank_match:
-                                rank = rank_match.group(1)
-                                
-                                users.append({
-                                    "position": int(position),
-                                    "name": name,
-                                    "username": username,
-                                    "points": points,
-                                    "messages": messages,
-                                    "rank": rank
-                                })
-                    
-                    i += 3  # Переходим к следующему пользователю
-                    continue
             
-            # Обрабатываем обычные места (без медалей)
-            match = re.search(pattern, line)
-            if match:
-                position = int(match.group(1))
-                name = match.group(2)
-                username = match.group(3)
-                points = float(match.group(4))
-                messages = int(match.group(5))
-                rank = match.group(6)
+        # Ищем начало информации о пользователе (со значком рейтинга или числом)
+        rank_match = re.match(r'^(🥇|🥈|🥉|\d+\.)\s+(.+?)\s+\(@([^)]+)\)', line)
+        if rank_match:
+            # Если у нас уже был пользователь в обработке, добавляем его в список
+            if current_user:
+                users.append(current_user)
                 
-                users.append({
-                    "position": position,
-                    "name": name,
-                    "username": username,
-                    "points": points,
-                    "messages": messages,
-                    "rank": rank
-                })
-        
-        i += 1
+            # Создаем нового пользователя
+            rank_symbol, name, username = rank_match.groups()
+            current_user = {
+                'name': name.strip(),
+                'username': username,
+                'points': 0,
+                'messages': 0,
+                'rank': ''
+            }
+        elif current_user and '⭐' in line and '|' in line:
+            # Строка с количеством баллов и сообщений
+            points_match = re.search(r'⭐\s+([\d.]+)\s+баллов\s+\|\s+💬\s+(\d+)\s+сообщений', line)
+            if points_match:
+                current_user['points'] = float(points_match.group(1))
+                current_user['messages'] = int(points_match.group(2))
+        elif current_user and '🏆 Ранг:' in line:
+            # Строка с рангом
+            rank_match = re.search(r'🏆\s+Ранг:\s+(.+)', line)
+            if rank_match:
+                current_user['rank'] = rank_match.group(1).strip()
     
+    # Не забываем добавить последнего пользователя
+    if current_user:
+        users.append(current_user)
+    
+    logger.info(f"Успешно распарсено {len(users)} пользователей")
     return users
 
 def restore_database(top_users_data, chat_id=-123456789, chat_title="Восстановленный чат"):
