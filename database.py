@@ -687,6 +687,40 @@ class Database:
             logger.error(f"Ошибка при получении случайных пользователей: {e}")
             return []
 
+    async def remove_user_from_chat(self, user_id, chat_id):
+        """Removes a user from the activity tracking when they leave a chat"""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Delete user's activity in the specific chat
+                await db.execute(
+                    'DELETE FROM activity WHERE user_id = ? AND chat_id = ?',
+                    (user_id, chat_id)
+                )
+                
+                # Check if the user has activity in any other chats
+                cursor = await db.execute(
+                    'SELECT COUNT(*) FROM activity WHERE user_id = ?',
+                    (user_id,)
+                )
+                result = await cursor.fetchone()
+                activities_in_other_chats = result[0] if result else 0
+                
+                # If user has no activity in any chat, remove them from users table
+                if activities_in_other_chats == 0:
+                    await db.execute(
+                        'DELETE FROM users WHERE user_id = ?',
+                        (user_id,)
+                    )
+                    logger.info(f"User {user_id} removed from database completely")
+                else:
+                    logger.info(f"User {user_id} removed from chat {chat_id} but kept in database")
+                
+                await db.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error removing user {user_id} from chat {chat_id}: {e}")
+            return False
+
 
 # Создание экземпляра базы данных
 db = Database()

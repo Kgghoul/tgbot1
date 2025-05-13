@@ -28,8 +28,8 @@ dp = Dispatcher(bot, storage=storage)
 from games import cmd_emoji_game, cmd_quiz, cmd_end_game, cmd_set_cooldown, GameStates, process_emoji_answer, process_quiz_answer
 from handlers import (cmd_start, cmd_help, cmd_stats, cmd_top, cmd_challenge, cmd_game_stats, 
                      cmd_chat_info, cmd_admin, cmd_send_to_all, cmd_check_inactive, cmd_send_report, 
-                     cmd_send_daily_topic, cmd_active_user_of_day, cmd_empty, on_new_chat_member, process_message,
-                     cmd_send_random_question, cmd_question_stats,
+                     cmd_send_daily_topic, cmd_active_user_of_day, cmd_empty, on_new_chat_member, on_left_chat_member, process_message,
+                     cmd_send_random_question, cmd_question_stats, cmd_clean_inactive_users,
                      # Новые команды
                      cmd_joke, cmd_fact, cmd_tech_fact, cmd_random_content,
                      cmd_schedule, cmd_create_event, cmd_cancel_event_creation,
@@ -265,9 +265,13 @@ dp.register_message_handler(cmd_check_inactive, commands=["check_inactive"])
 dp.register_message_handler(cmd_send_report, commands=["send_report"])
 dp.register_message_handler(cmd_send_daily_topic, commands=["send_daily_topic"])
 dp.register_message_handler(cmd_active_user_of_day, commands=["active_user_of_day"])
+dp.register_message_handler(cmd_clean_inactive_users, commands=["clean_inactive_users"])
 
 # Обработчик новых участников в чате
 dp.register_message_handler(on_new_chat_member, content_types=types.ContentTypes.NEW_CHAT_MEMBERS)
+
+# Обработчик ухода участников из чата
+dp.register_message_handler(on_left_chat_member, content_types=types.ContentTypes.LEFT_CHAT_MEMBER)
 
 # Обработчик для всех остальных сообщений (должен быть в последнюю очередь)
 dp.register_message_handler(process_message)

@@ -909,6 +909,7 @@ async def cmd_admin(message: types.Message):
             f"🛠️ *Административные команды:*\n\n"
             f"/chat_info - Информация о текущем чате\n"
             f"/check_inactive - Проверить неактивных пользователей\n"
+            f"/clean_inactive_users - Очистить базу от вышедших пользователей\n"
             f"/send_report - Отправить отчет об активности\n"
             f"/send_daily_topic - Отправить тему дня для обсуждения\n"
             f"/active_user_of_day - Объявить самого активного пользователя\n"
@@ -1069,8 +1070,14 @@ def register_handlers(dp):
     # Добавляем обработчик команды активного пользователя
     dp.register_message_handler(cmd_active_user_of_day, Command("active_user_of_day"))
     
+    # Добавляем обработчик команды очистки базы от вышедших пользователей
+    dp.register_message_handler(cmd_clean_inactive_users, Command("clean_inactive_users"))
+    
     # Обработчик новых участников в чате
     dp.register_message_handler(on_new_chat_member, content_types=types.ContentTypes.NEW_CHAT_MEMBERS)
+    
+    # Обработчик ухода участников из чата
+    dp.register_message_handler(on_left_chat_member, content_types=types.ContentTypes.LEFT_CHAT_MEMBER)
     
     # Обработчик для всех остальных сообщений регистрируем в последнюю очередь
     dp.register_message_handler(process_message)
@@ -1904,3 +1911,111 @@ async def invite_random_users_to_chat(bot):
         
     except Exception as e:
         logger.error(f"Критическая ошибка при проверке активности чатов: {e}")
+
+# Обработчик ухода участников из чата
+async def on_left_chat_member(message: types.Message):
+    """Удаляет покинувших участников из базы данных бота"""
+    if not message.left_chat_member:
+        return
+    
+    # Получаем информацию о пользователе и чате
+    left_user = message.left_chat_member
+    chat_id = message.chat.id
+    
+    # Пропускаем, если ушедший участник - это сам бот
+    if left_user.is_bot and left_user.username == (await message.bot.me).username:
+        return
+    
+    # Удаляем пользователя из базы данных для текущего чата
+    try:
+        success = await db.remove_user_from_chat(left_user.id, chat_id)
+        
+        if success:
+            logger.info(f"Пользователь {left_user.id} ({left_user.full_name}) удален из базы для чата {chat_id}")
+            
+            # Удаляем пользователя из будущих событий в чате
+            if schedule_manager:
+                # Получаем все события чата
+                events = await schedule_manager.get_chat_events(chat_id)
+                for event in events:
+                    # Удаляем пользователя из всех событий
+                    await schedule_manager.remove_participant(event['id'], left_user.id)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при удалении пользователя {left_user.id} из базы: {e}")
+
+# Обработчик команды /clean_inactive_users для очистки базы от вышедших пользователей
+async def cmd_clean_inactive_users(message: types.Message):
+    """Очищает базу данных от пользователей, которые больше не состоят в чате"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Проверяем, является ли пользователь администратором
+    if user_id not in ADMIN_ID:
+        await message.answer("❌ Эта команда доступна только администраторам.")
+        return
+    
+    await message.answer("🧹 Начинаю проверку и очистку базы данных от вышедших пользователей...")
+    
+    try:
+        # Получаем список всех пользователей в базе для этого чата
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute('''
+                SELECT DISTINCT u.user_id, u.username, u.first_name, u.last_name 
+                FROM users u
+                JOIN activity a ON u.user_id = a.user_id
+                WHERE a.chat_id = ?
+            ''', (chat_id,))
+            
+            users = await cursor.fetchall()
+        
+        # Счетчики
+        removed_count = 0
+        error_count = 0
+        
+        # Проверяем каждого пользователя
+        for user_id, username, first_name, last_name in users:
+            try:
+                # Пропускаем администраторов
+                if user_id in ADMIN_ID:
+                    continue
+                    
+                # Получаем информацию о пользователе в чате
+                chat_member = None
+                try:
+                    chat_member = await bot.get_chat_member(chat_id, user_id)
+                except Exception as e:
+                    # Если ошибка при получении информации - скорее всего пользователь вышел
+                    logger.info(f"Не удалось получить информацию о пользователе {user_id} в чате {chat_id}: {e}")
+                
+                # Если пользователь вышел или его аккаунт удален
+                if chat_member is None or chat_member.status == 'left' or chat_member.status == 'kicked':
+                    # Удаляем пользователя из базы для этого чата
+                    success = await db.remove_user_from_chat(user_id, chat_id)
+                    
+                    if success:
+                        removed_count += 1
+                        # Удаляем пользователя из всех событий
+                        if schedule_manager:
+                            events = await schedule_manager.get_chat_events(chat_id)
+                            for event in events:
+                                await schedule_manager.remove_participant(event['id'], user_id)
+                
+            except Exception as e:
+                logger.error(f"Ошибка при проверке пользователя {user_id}: {e}")
+                error_count += 1
+        
+        # Отправляем отчет о результатах
+        result_message = (
+            f"✅ Очистка базы данных завершена!\n\n"
+            f"📊 Результаты:\n"
+            f"• Удалено пользователей: {removed_count}\n"
+            f"• Ошибок: {error_count}\n\n"
+            f"База данных обновлена и содержит только актуальных участников чата."
+        )
+        
+        await message.answer(result_message)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при очистке базы данных: {e}")
+        await message.answer(f"❌ Произошла ошибка при очистке базы данных: {e}")
