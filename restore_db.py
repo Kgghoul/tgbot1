@@ -3,6 +3,7 @@ import datetime
 import os
 import re
 import logging
+import random
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -389,9 +390,6 @@ def restore_database(top_users_data, chat_id=-123456789, chat_title="Восст�
     
     # Временный искусственный ID
     user_id_start = 10000
-    
-    # Импортируем модуль random для случайных значений
-    import random
     
     # Добавляем пользователей и их активность
     for user in users:
