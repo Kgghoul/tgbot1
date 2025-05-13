@@ -343,38 +343,66 @@ def parse_top_users_data(data):
     return users
 
 def restore_database(top_users_data, chat_id=-123456789, chat_title="Восстановленный чат"):
-    """Восстанавливает базу данных с топ пользователями"""
-    # Проверяем, существует ли уже файл базы данных
-    if os.path.exists(DB_PATH):
-        backup_path = f"{DB_PATH}.backup.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-        os.rename(DB_PATH, backup_path)
-        logger.info(f"Существующая база данных сохранена как {backup_path}")
-    
-    # Инициализируем базу данных
-    init_db()
-    
-    # Добавляем чат
-    add_chat(chat_id, chat_title)
-    
-    # Парсим данные пользователей
-    users = parse_top_users_data(top_users_data)
-    
-    # Временный искусственный ID
-    user_id_start = 10000
-    
-    # Добавляем пользователей и их активность
-    for user in users:
-        # Используем позицию пользователя для создания уникального ID
-        user_id = user_id_start + user["position"]
+    """Восстанавливает базу данных с данными о пользователях"""
+    try:
+        # Инициализируем базу данных
+        init_db()
         
-        # Добавляем пользователя
-        add_user(user_id, user["username"], user["name"], user["rank"])
+        # Добавляем чат
+        add_chat(chat_id, chat_title)
         
-        # Добавляем активность пользователя
-        add_activity(chat_id, user_id, user["points"], user["messages"])
-    
-    logger.info(f"Восстановление базы данных завершено. Добавлено {len(users)} пользователей.")
-    return users
+        # Если это строка, парсим её, иначе используем как есть
+        if isinstance(top_users_data, str):
+            users = parse_top_users_data(top_users_data)
+        else:
+            # Предполагаем, что это уже список пользователей или один пользователь
+            if isinstance(top_users_data, dict):
+                users = [top_users_data]
+            else:
+                users = top_users_data
+        
+        if not users:
+            logger.error("Не удалось получить данные о пользователях")
+            return False
+            
+        logger.info(f"Успешно распарсено {len(users)} пользователей")
+        
+        # Сохраняем оригинальную базу данных, если она существует
+        if os.path.exists(DB_PATH + '.bak'):
+            os.remove(DB_PATH + '.bak')
+            
+        if os.path.exists(DB_PATH):
+            import shutil
+            shutil.copy2(DB_PATH, DB_PATH + '.backup.' + datetime.datetime.now().strftime('%Y%m%d%H%M%S'))
+            logger.info(f"Существующая база данных сохранена как {DB_PATH}.backup.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
+        
+        # Временный искусственный ID
+        user_id_start = 10000
+        
+        # Добавляем пользователей и их активность
+        for i, user in enumerate(users):
+            # Генерируем фиктивный ID пользователя, если не указан
+            user_id = user.get('user_id', user_id_start + i)
+            username = user.get('username', '')
+            name = user.get('name', f'User_{i}')
+            rank = user.get('rank', '🔍 Искатель')
+            points = user.get('points', 0)
+            messages = user.get('messages', 0)
+            
+            # Добавляем пользователя
+            add_user(user_id, username, name, rank)
+            
+            # Добавляем активность
+            add_activity(chat_id, user_id, points, messages)
+        
+        logger.info(f"База данных успешно восстановлена с {len(users)} пользователями")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при восстановлении базы данных: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
 
 # Добавим основной блок для автоматического запуска восстановления при запуске скрипта
 if __name__ == "__main__":
