@@ -1959,8 +1959,9 @@ async def cmd_clean_inactive_users(message: types.Message):
     
     try:
         # Получаем список всех пользователей в базе для этого чата
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute('''
+        async with aiosqlite.connect(DB_PATH) as conn:
+            conn.row_factory = aiosqlite.Row  # Используем Row для удобства доступа к полям
+            cursor = await conn.execute('''
                 SELECT DISTINCT u.user_id, u.username, u.first_name, u.last_name 
                 FROM users u
                 JOIN activity a ON u.user_id = a.user_id
@@ -1968,54 +1969,96 @@ async def cmd_clean_inactive_users(message: types.Message):
             ''', (chat_id,))
             
             users = await cursor.fetchall()
+            
+            user_count = len(users)
+            await message.answer(f"📊 Найдено {user_count} пользователей в базе данных для этого чата.")
         
         # Счетчики
         removed_count = 0
         error_count = 0
+        still_in_chat = 0
+        
+        # Статус-сообщение, которое будем обновлять
+        status_message = await message.answer("⏳ Проверка пользователей... (0/{})".format(user_count))
         
         # Проверяем каждого пользователя
-        for user_id, username, first_name, last_name in users:
+        for i, user_row in enumerate(users, 1):
+            current_user_id = user_row['user_id']
+            username = user_row['username']
+            first_name = user_row['first_name']
+            
+            # Обновляем статус каждые 5 пользователей
+            if i % 5 == 0 or i == len(users):
+                try:
+                    await bot.edit_message_text(
+                        f"⏳ Проверка пользователей... ({i}/{user_count})", 
+                        chat_id=chat_id, 
+                        message_id=status_message.message_id
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка при обновлении статуса: {e}")
+            
             try:
                 # Пропускаем администраторов
-                if user_id in ADMIN_ID:
+                if current_user_id in ADMIN_ID:
+                    logger.info(f"Пропускаем администратора {current_user_id}")
                     continue
                     
                 # Получаем информацию о пользователе в чате
-                chat_member = None
+                user_is_in_chat = True
                 try:
-                    chat_member = await bot.get_chat_member(chat_id, user_id)
+                    chat_member = await bot.get_chat_member(chat_id, current_user_id)
+                    # Проверяем статус - left или kicked означает, что пользователя нет в чате
+                    if chat_member.status in ['left', 'kicked']:
+                        user_is_in_chat = False
+                        logger.info(f"Пользователь {current_user_id} имеет статус {chat_member.status}")
                 except Exception as e:
                     # Если ошибка при получении информации - скорее всего пользователь вышел
-                    logger.info(f"Не удалось получить информацию о пользователе {user_id} в чате {chat_id}: {e}")
+                    logger.info(f"Не удалось получить информацию о пользователе {current_user_id} в чате {chat_id}: {e}")
+                    user_is_in_chat = False
                 
                 # Если пользователь вышел или его аккаунт удален
-                if chat_member is None or chat_member.status == 'left' or chat_member.status == 'kicked':
+                if not user_is_in_chat:
                     # Удаляем пользователя из базы для этого чата
-                    success = await db.remove_user_from_chat(user_id, chat_id)
+                    success = await db.remove_user_from_chat(current_user_id, chat_id)
+                    
+                    user_display = f"{first_name} (@{username})" if username else f"{first_name} ({current_user_id})"
+                    logger.info(f"Удаление пользователя {user_display}: {'успешно' if success else 'неудачно'}")
                     
                     if success:
                         removed_count += 1
                         # Удаляем пользователя из всех событий
                         if schedule_manager:
-                            events = await schedule_manager.get_chat_events(chat_id)
-                            for event in events:
-                                await schedule_manager.remove_participant(event['id'], user_id)
+                            try:
+                                events = await schedule_manager.get_chat_events(chat_id)
+                                for event in events:
+                                    await schedule_manager.remove_participant(event['id'], current_user_id)
+                            except Exception as e:
+                                logger.error(f"Ошибка при удалении пользователя из событий: {e}")
+                else:
+                    still_in_chat += 1
                 
             except Exception as e:
-                logger.error(f"Ошибка при проверке пользователя {user_id}: {e}")
+                logger.error(f"Ошибка при проверке пользователя {current_user_id}: {e}")
                 error_count += 1
         
         # Отправляем отчет о результатах
         result_message = (
             f"✅ Очистка базы данных завершена!\n\n"
             f"📊 Результаты:\n"
+            f"• Всего пользователей в базе: {user_count}\n"
+            f"• Остались в чате: {still_in_chat}\n"
             f"• Удалено пользователей: {removed_count}\n"
-            f"• Ошибок: {error_count}\n\n"
+            f"• Ошибок при проверке: {error_count}\n\n"
             f"База данных обновлена и содержит только актуальных участников чата."
         )
         
-        await message.answer(result_message)
+        # Пытаемся обновить статус-сообщение, если не получится - отправим новое
+        try:
+            await bot.edit_message_text(result_message, chat_id=chat_id, message_id=status_message.message_id)
+        except:
+            await message.answer(result_message)
         
     except Exception as e:
         logger.error(f"Ошибка при очистке базы данных: {e}")
-        await message.answer(f"❌ Произошла ошибка при очистке базы данных: {e}")
+        await message.answer(f"❌ Произошла ошибка при очистке базы данных: {str(e)}")
