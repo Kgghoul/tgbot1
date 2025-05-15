@@ -275,8 +275,17 @@ async def cmd_stats(message: types.Message):
 async def cmd_top(message: types.Message):
     chat_id = message.chat.id
     
+    # Логирование для отладки
+    logger.info(f"Запрошен топ пользователей для чата {chat_id}")
+    
+    # Проверяем, существует ли чат в базе данных
+    await db.add_chat(chat_id, message.chat.title if hasattr(message.chat, 'title') else "Личный чат")
+    
     # Получаем топ пользователей
     top_users = await db.get_top_users(chat_id)
+    
+    # Логирование количества найденных пользователей
+    logger.info(f"Найдено {len(top_users) if top_users else 0} пользователей в топе для чата {chat_id}")
     
     # Если пользователей нет, выводим сообщение
     if not top_users:
@@ -294,9 +303,14 @@ async def cmd_top(message: types.Message):
         rank = await db.get_rank_by_points(total_points)
         
         # Формируем имя пользователя
-        name = first_name
-        if last_name:
-            name += f" {last_name}"
+        if first_name:
+            name = first_name
+            if last_name:
+                name += f" {last_name}"
+        else:
+            name = f"User_{user_id}"
+            
+        # Добавляем username в скобках, если он доступен
         if username:
             name += f" (@{username})"
             
@@ -311,7 +325,7 @@ async def cmd_top(message: types.Message):
         else:
             medal = f"{i}. "
             
-        response += f"{medal}*{name}*\n"
+        response += f"{medal}{name}\n"
         response += f"   ⭐ {total_points:.1f} баллов | 💬 {total_messages} сообщений\n"
         response += f"   🏆 Ранг: {rank}\n\n"
     
@@ -913,6 +927,7 @@ async def cmd_admin(message: types.Message):
             f"/send_report - Отправить отчет об активности\n"
             f"/send_daily_topic - Отправить тему дня для обсуждения\n"
             f"/active_user_of_day - Объявить самого активного пользователя\n"
+            f"/add_points - Начислить очки активности пользователю\n"
             f"/send_to_all - Отправить сообщение во все чаты\n"
         )
         
@@ -2062,3 +2077,92 @@ async def cmd_clean_inactive_users(message: types.Message):
     except Exception as e:
         logger.error(f"Ошибка при очистке базы данных: {e}")
         await message.answer(f"❌ Произошла ошибка при очистке базы данных: {str(e)}")
+
+# Обработчик команды /add_points для начисления очков активности
+async def cmd_add_points(message: types.Message):
+    """Начисляет очки активности пользователю (только для администраторов)"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Проверяем, является ли пользователь администратором
+    if user_id not in ADMIN_ID:
+        await message.answer("❌ Эта команда доступна только администраторам.")
+        return
+    
+    # Разбор аргументов команды
+    command_args = message.get_args().split()
+    if not command_args or len(command_args) > 2:
+        await message.answer("❌ Неверный формат команды. Используйте: /add_points <points> в ответ на сообщение или /add_points <user_id> <points>")
+        return
+    
+    try:
+        # Определяем ID пользователя и количество очков в зависимости от формата команды
+        if len(command_args) == 1:
+            # Если команда в формате "/add_points <points>" (отправлена в ответ на сообщение)
+            if not message.reply_to_message:
+                await message.answer("❌ Чтобы начислить очки, ответьте на сообщение пользователя командой /add_points <points>")
+                return
+                
+            points_to_add = float(command_args[0])
+            target_user_id = message.reply_to_message.from_user.id
+            
+            # Не начисляем очки боту
+            if message.reply_to_message.from_user.is_bot:
+                await message.answer("❌ Невозможно начислить очки боту.")
+                return
+        else:
+            # Если команда в формате "/add_points <user_id> <points>"
+            target_user_id = int(command_args[0])
+            points_to_add = float(command_args[1])
+        
+        # Проверяем, что количество очков положительное
+        if points_to_add <= 0:
+            await message.answer("❌ Количество очков должно быть положительным числом.")
+            return
+        
+        # Убедимся, что пользователь существует в базе данных
+        await db.add_chat(chat_id, message.chat.title if hasattr(message.chat, 'title') else "Личный чат")
+        
+        # Получаем информацию о пользователе
+        if message.reply_to_message:
+            username = message.reply_to_message.from_user.username
+            first_name = message.reply_to_message.from_user.first_name
+            last_name = message.reply_to_message.from_user.last_name
+        else:
+            # Если нет ответа на сообщение, пробуем получить информацию из чата
+            try:
+                chat_member = await message.bot.get_chat_member(chat_id, target_user_id)
+                username = chat_member.user.username
+                first_name = chat_member.user.first_name
+                last_name = chat_member.user.last_name
+            except:
+                # Если не удалось получить информацию, используем заглушки
+                username = None
+                first_name = f"User_{target_user_id}"
+                last_name = None
+        
+        # Добавляем пользователя в базу или обновляем его информацию
+        await db.add_user(target_user_id, username, first_name, last_name)
+            
+        # Добавляем очки активности пользователю
+        rank_info = await db.add_activity(chat_id, target_user_id, "manual_addition", points_to_add)
+        
+        # Формируем сообщение об успешном начислении очков
+        user_mention = f"[пользователю](tg://user?id={target_user_id})"
+        response = f"✅ Успешно добавлено {points_to_add} очков {user_mention}."
+        
+        # Если произошло повышение ранга, добавляем информацию
+        if rank_info and rank_info.get('is_rank_up', False):
+            old_rank = rank_info.get('old_rank', '')
+            new_rank = rank_info.get('new_rank', '')
+            total_points = rank_info.get('total_points', 0)
+            
+            response += f"\n\n🎖 *Повышение ранга!*\n📊 Набрано {total_points:.1f} баллов\n📈 Прошлый ранг: {old_rank}\n✨ Новый ранг: {new_rank}\n🎉 Поздравляем с достижением!"
+        
+        await message.answer(response, parse_mode="Markdown")
+        
+    except ValueError:
+        await message.answer("❌ Неверный формат ID пользователя или количества очков.")
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении очков пользователю: {e}")
+        await message.answer("❌ Произошла ошибка при добавлении очков. Попробуйте позже.")

@@ -35,7 +35,7 @@ from handlers import (cmd_start, cmd_help, cmd_stats, cmd_top, cmd_challenge, cm
                      cmd_schedule, cmd_create_event, cmd_cancel_event_creation,
                      process_event_title, process_event_description, process_event_date, process_event_time,
                      process_event_confirmation, cmd_view_event, cmd_join_event, cmd_leave_event, cmd_delete_event,
-                     ScheduleStates, send_event_notifications, schedule_event_notifications)
+                     ScheduleStates, send_event_notifications, schedule_event_notifications, cmd_add_points)
 
 # Устанавливаем экземпляр бота в модуль handlers
 handlers.set_bot(bot)
@@ -266,6 +266,7 @@ dp.register_message_handler(cmd_send_report, commands=["send_report"])
 dp.register_message_handler(cmd_send_daily_topic, commands=["send_daily_topic"])
 dp.register_message_handler(cmd_active_user_of_day, commands=["active_user_of_day"])
 dp.register_message_handler(cmd_clean_inactive_users, commands=["clean_inactive_users"])
+dp.register_message_handler(cmd_add_points, commands=["add_points"])
 
 # Обработчик новых участников в чате
 dp.register_message_handler(on_new_chat_member, content_types=types.ContentTypes.NEW_CHAT_MEMBERS)
