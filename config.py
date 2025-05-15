@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Токен бота из переменных окружения или напрямую
-TOKEN = '799267013345318:AAFeV42iwTww6yhtuQd0UB-5ol4BuyvYXivXE'
+TOKEN = '7992670135253345318:AAFeV42iwTww6yhtuQd0UB-5ol4BuyvYXivXE'
 BOT_TOKEN = TOKEN  # Для обратной совместимости
 
 # Имя пользователя бота (без @)
