@@ -393,18 +393,26 @@ class Database:
     
     async def get_top_users(self, chat_id, limit=10):
         """Получение списка самых активных пользователей в чате"""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute('''
-                SELECT u.user_id, u.username, u.first_name, u.last_name, SUM(a.points) as total_points, COUNT(a.id) as total_messages
-                FROM activity a
-                JOIN users u ON a.user_id = u.user_id
-                WHERE a.chat_id = ?
-                GROUP BY a.user_id
-                ORDER BY total_points DESC
-                LIMIT ?
-            ''', (chat_id, limit))
-            
-            return await cursor.fetchall()
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute('''
+                    SELECT u.user_id, u.username, u.first_name, u.last_name, 
+                           SUM(a.points) as total_points, COUNT(a.id) as total_messages
+                    FROM users u
+                    INNER JOIN activity a ON u.user_id = a.user_id
+                    WHERE a.chat_id = ?
+                    GROUP BY u.user_id
+                    HAVING total_points > 0
+                    ORDER BY total_points DESC
+                    LIMIT ?
+                ''', (chat_id, limit))
+                
+                results = await cursor.fetchall()
+                logger.info(f"Получено {len(results)} пользователей в топе для чата {chat_id}")
+                return results
+        except Exception as e:
+            logger.error(f"Ошибка при получении топа пользователей: {e}")
+            return []
     
     async def get_inactive_users(self, chat_id, days=3):
         """Получение списка неактивных пользователей в чате"""
