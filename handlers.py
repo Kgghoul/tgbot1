@@ -271,6 +271,18 @@ async def cmd_stats(message: types.Message):
     await message.answer(response, parse_mode="Markdown")
 
 
+def escape_markdown(text):
+    if not text:
+        return ""
+    return (
+        text.replace("_", "\\_")
+            .replace("*", "\\*")
+            .replace("[", "\\[")
+            .replace("]", "\\]")
+            .replace("(", "\\(")
+            .replace(")", "\\)")
+    )
+
 # Обработчик команды /top
 async def cmd_top(message: types.Message):
     chat_id = message.chat.id
@@ -309,11 +321,15 @@ async def cmd_top(message: types.Message):
                 name += f" {last_name}"
         else:
             name = f"User_{user_id}"
-            
+        
         # Добавляем username в скобках, если он доступен
         if username:
             name += f" (@{username})"
-            
+        
+        # Экранируем все пользовательские данные
+        name = escape_markdown(name)
+        rank = escape_markdown(rank)
+        
         # Добавляем медали для первых трех мест
         medal = ""
         if i == 1:
@@ -324,7 +340,7 @@ async def cmd_top(message: types.Message):
             medal = "🥉 "
         else:
             medal = f"{i}. "
-            
+        
         response += f"{medal}{name}\n"
         response += f"   ⭐ {total_points:.1f} баллов | 💬 {total_messages} сообщений\n"
         response += f"   🏆 Ранг: {rank}\n\n"
