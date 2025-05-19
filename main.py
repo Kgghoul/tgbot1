@@ -35,7 +35,8 @@ from handlers import (cmd_start, cmd_help, cmd_stats, cmd_top, cmd_challenge, cm
                      cmd_schedule, cmd_create_event, cmd_cancel_event_creation,
                      process_event_title, process_event_description, process_event_date, process_event_time,
                      process_event_confirmation, cmd_view_event, cmd_join_event, cmd_leave_event, cmd_delete_event,
-                     ScheduleStates, send_event_notifications, schedule_event_notifications, cmd_add_points)
+                     ScheduleStates, send_event_notifications, schedule_event_notifications, cmd_add_points,
+                     cmd_remove_user)
 
 # Устанавливаем экземпляр бота в модуль handlers
 handlers.set_bot(bot)
@@ -60,6 +61,7 @@ BOT_COMMANDS = [
     types.BotCommand(command="schedule", description="Расписание событий чата"),
     types.BotCommand(command="create_event", description="Создать новое событие"),
     types.BotCommand(command="empty", description="Очистить список команд бота"),
+    types.BotCommand(command="remove_user", description="Удалить пользователя из базы данных (только для администраторов)")
 ]
 
 # Установка команд для бота
@@ -261,6 +263,7 @@ dp.register_message_handler(cmd_delete_event, regexp=r"^/delete_event_\d+$")
 dp.register_message_handler(cmd_chat_info, commands=["chat_info"])
 dp.register_message_handler(cmd_admin, commands=["admin"])
 dp.register_message_handler(cmd_send_to_all, commands=["send_to_all"])
+dp.register_message_handler(cmd_remove_user, commands=["remove_user"])
 dp.register_message_handler(cmd_check_inactive, commands=["check_inactive"])
 dp.register_message_handler(cmd_send_report, commands=["send_report"])
 dp.register_message_handler(cmd_send_daily_topic, commands=["send_daily_topic"])

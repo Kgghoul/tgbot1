@@ -1088,6 +1088,7 @@ def register_handlers(dp):
     dp.register_message_handler(cmd_chat_info, commands=["chat_info"])
     dp.register_message_handler(cmd_admin, commands=["admin"])
     dp.register_message_handler(cmd_send_to_all, commands=["send_to_all"])
+    dp.register_message_handler(cmd_remove_user, commands=["remove_user"])  # Added remove_user command registration
     
     # Добавляем обработчик команды проверки неактивных
     dp.register_message_handler(cmd_check_inactive, Command("check_inactive"))
@@ -2182,3 +2183,69 @@ async def cmd_add_points(message: types.Message):
     except Exception as e:
         logger.error(f"Ошибка при добавлении очков пользователю: {e}")
         await message.answer("❌ Произошла ошибка при добавлении очков. Попробуйте позже.")
+
+# Обработчик команды /remove_user
+async def cmd_remove_user(message: types.Message):
+    """Удаляет пользователя из базы данных по ID (только для администраторов)"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Логируем попытку использования команды
+    logger.info(f"Попытка использования команды /remove_user в чате {chat_id} пользователем {user_id}")
+    
+    # Проверяем, является ли пользователь администратором
+    if user_id not in ADMIN_ID:
+        logger.warning(f"Пользователь {user_id} попытался использовать команду /remove_user без прав администратора")
+        await message.answer("❌ Эта команда доступна только администраторам.")
+        return
+    
+    # Разбор аргументов команды
+    command_args = message.get_args().split()
+    if not command_args or len(command_args) != 1:
+        logger.warning(f"Неверный формат команды /remove_user от пользователя {user_id}: {message.text}")
+        await message.answer("❌ Неверный формат команды. Используйте: /remove_user <user_id>")
+        return
+    
+    try:
+        target_user_id = int(command_args[0])
+        logger.info(f"Администратор {user_id} пытается удалить пользователя {target_user_id} из чата {chat_id}")
+        
+        # Проверяем, существует ли пользователь в чате
+        try:
+            chat_member = await message.bot.get_chat_member(chat_id, target_user_id)
+            if chat_member.status in ['left', 'kicked']:
+                logger.info(f"Пользователь {target_user_id} уже не находится в чате {chat_id}")
+                await message.answer(f"ℹ️ Пользователь {target_user_id} уже не находится в этом чате.")
+                return
+        except Exception as e:
+            logger.error(f"Ошибка при проверке статуса пользователя {target_user_id} в чате {chat_id}: {e}")
+            await message.answer(f"❌ Не удалось проверить статус пользователя {target_user_id} в чате.")
+            return
+        
+        # Удаляем пользователя из базы данных
+        success = await db.remove_user_from_chat(target_user_id, chat_id)
+        
+        if success:
+            logger.info(f"Пользователь {target_user_id} успешно удален из базы данных для чата {chat_id}")
+            
+            # Удаляем пользователя из всех событий в чате
+            if schedule_manager:
+                try:
+                    events = await schedule_manager.get_chat_events(chat_id)
+                    for event in events:
+                        await schedule_manager.remove_participant(event['id'], target_user_id)
+                    logger.info(f"Пользователь {target_user_id} удален из всех событий в чате {chat_id}")
+                except Exception as e:
+                    logger.error(f"Ошибка при удалении пользователя {target_user_id} из событий: {e}")
+            
+            await message.answer(f"✅ Пользователь {target_user_id} успешно удален из базы данных и всех событий чата.")
+        else:
+            logger.error(f"Не удалось удалить пользователя {target_user_id} из базы данных для чата {chat_id}")
+            await message.answer(f"❌ Не удалось удалить пользователя {target_user_id} из базы данных.")
+            
+    except ValueError:
+        logger.error(f"Неверный формат ID пользователя в команде /remove_user: {command_args[0]}")
+        await message.answer("❌ Неверный формат ID пользователя. ID должен быть числом.")
+    except Exception as e:
+        logger.error(f"Ошибка при выполнении команды /remove_user: {e}")
+        await message.answer("❌ Произошла ошибка при выполнении команды.")
