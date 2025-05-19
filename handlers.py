@@ -2210,18 +2210,6 @@ async def cmd_remove_user(message: types.Message):
         target_user_id = int(command_args[0])
         logger.info(f"Администратор {user_id} пытается удалить пользователя {target_user_id} из чата {chat_id}")
         
-        # Проверяем, существует ли пользователь в чате
-        try:
-            chat_member = await message.bot.get_chat_member(chat_id, target_user_id)
-            if chat_member.status in ['left', 'kicked']:
-                logger.info(f"Пользователь {target_user_id} уже не находится в чате {chat_id}")
-                await message.answer(f"ℹ️ Пользователь {target_user_id} уже не находится в этом чате.")
-                return
-        except Exception as e:
-            logger.error(f"Ошибка при проверке статуса пользователя {target_user_id} в чате {chat_id}: {e}")
-            await message.answer(f"❌ Не удалось проверить статус пользователя {target_user_id} в чате.")
-            return
-        
         # Удаляем пользователя из базы данных
         success = await db.remove_user_from_chat(target_user_id, chat_id)
         
